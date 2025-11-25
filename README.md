@@ -37,7 +37,7 @@ pip install slack-markdown-parser
 または、開発版をインストール：
 
 ```bash
-git clone https://github.com/yourusername/slack-markdown-parser.git
+git clone https://github.com/darkgaldragon/slack-markdown-parser.git
 cd slack-markdown-parser
 pip install -e .
 ```
@@ -207,7 +207,7 @@ MIT License
 
 ## 作者
 
-Your Name
+darkgaldragon（ぎゃうどら）
 
 ## 貢献
 

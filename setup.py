@@ -13,12 +13,11 @@ with open(os.path.join(this_directory, 'README.md'), encoding='utf-8') as f:
 setup(
     name='slack-markdown-parser',
     version='1.0.0',
-    author='Your Name',
-    author_email='your.email@example.com',
+    author='darkgaldragon（ぎゃうどら）',
     description='Convert Markdown text to Slack blocks with table support',
     long_description=long_description,
     long_description_content_type='text/markdown',
-    url='https://github.com/yourusername/slack-markdown-parser',
+    url='https://github.com/darkgaldragon/slack-markdown-parser',
     packages=find_packages(),
     classifiers=[
         'Development Status :: 4 - Beta',
@@ -43,7 +42,7 @@ setup(
     },
     keywords='slack markdown parser converter blocks table',
     project_urls={
-        'Bug Reports': 'https://github.com/yourusername/slack-markdown-parser/issues',
-        'Source': 'https://github.com/yourusername/slack-markdown-parser',
+        'Bug Reports': 'https://github.com/darkgaldragon/slack-markdown-parser/issues',
+        'Source': 'https://github.com/darkgaldragon/slack-markdown-parser',
     },
 )
