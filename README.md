@@ -59,22 +59,38 @@ for blocks in convert_markdown_to_slack_messages(markdown):
 
 ## 入出力イメージ
 
-入力（LLM 出力）:
+実際の Chloe BOT 検証で使用した入力（LLM 出力想定）:
 
 ```markdown
-# Weekly Report
+# 週次プロダクト更新
 
-| Team | Status |
-|---|---|
-| API | **On track** |
-| UI | *In progress* |
+今週は **検索速度改善** と *UI調整* を進めました。旧仕様は ~~廃止予定~~ です。
+詳細ログIDは `run-20260305-01` です。
+参考: https://example.com/changelog
+
+- APIのレスポンス改善
+- バッチ処理の安定化
+- ドキュメント更新
+
+カテゴリ | 状況 | 担当
+API | **進行中** | Team A
+UI | *確認中* | Team B
+QA | ~~保留~~ | Team C
+
+> 注意: 本番反映は 3/8 10:00 JST を予定
+
+1. リリースノート最終確認
+2. 監視アラートしきい値調整
+3. QA再確認
+
+```bash
+./deploy.sh production
+```
 ```
 
-出力（概念）:
+Slack 上の実際の表示例（`markdown` + `table` ブロック）:
 
-- message 1
-- `markdown` block: `# Weekly Report`
-- `table` block: Team/Status の表データ
+![Chloe BOT rendering example](docs/images/chloe-rendering-example.png)
 
 ## 公開 API
 
