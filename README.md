@@ -222,6 +222,7 @@ See [LAMBDA_INTEGRATION_GUIDE.md](LAMBDA_INTEGRATION_GUIDE.md).
 - Release process: [RELEASE.md](RELEASE.md)
 - Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Support channels: [SUPPORT.md](SUPPORT.md)
+- Maintainer updates/contact on X: [`@darkgaldragon`](https://x.com/darkgaldragon)
 - Public-share checklist (GitHub beginners): [docs/OSS_RELEASE_CHECKLIST.md](docs/OSS_RELEASE_CHECKLIST.md)
 
 ## License

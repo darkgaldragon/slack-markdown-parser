@@ -4,6 +4,7 @@
 
 - Usage questions: GitHub Discussions
 - Bugs: GitHub Issues
+- Maintainer updates/contact: X ([`@darkgaldragon`](https://x.com/darkgaldragon))
 - Security concerns: see [SECURITY.md](SECURITY.md)
 
 ## When filing an issue
