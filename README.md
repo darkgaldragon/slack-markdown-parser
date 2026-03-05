@@ -21,7 +21,7 @@ Slack の `markdown` / `table` ブロックを用いて、LLM が出力する標
 - Tableブロックは「1メッセージ1テーブル」の制限があるため、テーブルごとにブロックを自動分割してメッセージを生成
 - Tableブロック仕様で受け付けない、壊れたテーブル記法（外枠パイプ不足、separator不足、列数不一致）や空セルを `-` で補完して `invalid_blocks` エラーを回避
 - 装飾記号まわりの表示崩れを抑えるため ZWSP を付与（コード領域は除外）
-- `chat.postMessage.text` 用の fallback テキストを再構築
+- `chat.postMessage.text` 用の fallback テキストを再構築（通知プレビューや一部クライアント向けに、`blocks`内容をプレーンテキストへ展開）
 
 ## 利用前提（重要）
 
