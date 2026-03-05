@@ -61,7 +61,7 @@ for blocks in convert_markdown_to_slack_messages(markdown):
 
 実際の Chloe BOT 検証で使用した入力（LLM 出力想定）:
 
-```markdown
+````markdown
 # 週次プロダクト更新
 
 今週は **検索速度改善** と *UI調整* を進めました。旧仕様は ~~廃止予定~~ です。
@@ -86,7 +86,7 @@ QA | ~~保留~~ | Team C
 ```bash
 ./deploy.sh production
 ```
-```
+````
 
 Slack 上の実際の表示例（`markdown` + `table` ブロック）:
 
