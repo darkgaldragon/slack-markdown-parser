@@ -103,6 +103,13 @@ def test_zero_width_space_not_inserted_inside_code_fence() -> None:
     assert "**bold**\u200b" in converted
 
 
+def test_inline_code_without_spaces_is_padded_with_zwsp() -> None:
+    text = "詳細ログIDは`run-20260305-02`です。"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert "詳細ログIDは\u200b`run-20260305-02`\u200bです。" == converted
+
+
 def test_blocks_to_plain_text_and_fallback_generation() -> None:
     raw = """# Title
 

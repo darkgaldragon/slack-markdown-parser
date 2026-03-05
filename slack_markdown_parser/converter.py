@@ -36,7 +36,7 @@ def strip_zero_width_spaces(text: str) -> str:
 def add_zero_width_spaces_to_markdown(text: str) -> str:
     """Stabilize markdown rendering by padding style markers with ZWSP.
 
-    Code fences and inline code segments are preserved untouched.
+    Code fences are preserved untouched.
     """
     if not text:
         return text
@@ -55,7 +55,7 @@ def add_zero_width_spaces_to_markdown(text: str) -> str:
         if not segment:
             return segment
         patterns = [
-            r"(?<!`)`[^`]+`(?!`)",
+            r"(?<!`)`[^`\n]+`(?!`)",
             r"(?<!\*)\*\*(.+?)\*\*(?!\*)",
             r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)",
             r"~~(.+?)~~",
@@ -69,10 +69,10 @@ def add_zero_width_spaces_to_markdown(text: str) -> str:
             )
         return segment
 
-    code_pattern = r"(```.*?```|`[^`]*`)"
-    parts = re.split(code_pattern, text, flags=re.DOTALL)
+    code_fence_pattern = r"(```.*?```)"
+    parts = re.split(code_fence_pattern, text, flags=re.DOTALL)
     for idx, part in enumerate(parts):
-        if re.fullmatch(code_pattern, part or "", flags=re.DOTALL):
+        if re.fullmatch(code_fence_pattern, part or "", flags=re.DOTALL):
             continue
         parts[idx] = wrap_segment(part)
     return "".join(parts)
