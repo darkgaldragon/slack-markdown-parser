@@ -59,13 +59,13 @@ for blocks in convert_markdown_to_slack_messages(markdown):
 
 ## 入出力イメージ
 
-入力サンプル（LLM 出力想定・ネストリスト含む）:
+検証テキスト:
 
 ````markdown
 # 週次プロダクト更新
 
 今週は **検索速度改善** と *UI調整* を進めました。旧仕様は ~~廃止予定~~ です。
-詳細ログIDは `run-20260305-01` です。
+詳細ログIDは `run-20260305-02` です。
 参考: https://example.com/changelog
 
 - APIのレスポンス改善
@@ -94,10 +94,9 @@ QA | ~~保留~~ | Team C
 ```
 ````
 
-Slack 上の実際の表示例（`markdown` + `table` ブロック）:
-（同系フォーマットの実例）
+実際のSlack BOTでの表示例（`markdown` + `table` ブロック）:
 
-![Chloe BOT rendering example](docs/images/chloe-rendering-example.png)
+![Slack BOT rendering example](docs/images/slack-bot-rendering-example.png)
 
 ## 公開 API
 
