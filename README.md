@@ -59,7 +59,7 @@ for blocks in convert_markdown_to_slack_messages(markdown):
 
 ## 入出力イメージ
 
-実際の Chloe BOT 検証で使用した入力（LLM 出力想定）:
+入力サンプル（LLM 出力想定・ネストリスト含む）:
 
 ````markdown
 # 週次プロダクト更新
@@ -69,7 +69,10 @@ for blocks in convert_markdown_to_slack_messages(markdown):
 参考: https://example.com/changelog
 
 - APIのレスポンス改善
+  - キャッシュヒット率を改善
+  - タイムアウト設定を調整
 - バッチ処理の安定化
+  - リトライ回数を統一
 - ドキュメント更新
 
 カテゴリ | 状況 | 担当
@@ -80,7 +83,10 @@ QA | ~~保留~~ | Team C
 > 注意: 本番反映は 3/8 10:00 JST を予定
 
 1. リリースノート最終確認
+   1. 変更点の表記統一
+   2. 影響範囲の追記
 2. 監視アラートしきい値調整
+   1. warning閾値の更新
 3. QA再確認
 
 ```bash
@@ -89,6 +95,7 @@ QA | ~~保留~~ | Team C
 ````
 
 Slack 上の実際の表示例（`markdown` + `table` ブロック）:
+（同系フォーマットの実例）
 
 ![Chloe BOT rendering example](docs/images/chloe-rendering-example.png)
 
