@@ -1,33 +1,38 @@
 # slack-markdown-parser
 
-LLM が生成する一般的な Markdown を Slack Block Kit（`markdown` + `table`）に変換し、Slack 上で適切にMarkdown表現ができるようにする Python ライブラリです。
+LLM が生成する標準的な Markdown を Slack Block Kit（`markdown` + `table` ブロック）に変換する Python ライブラリです。
 
 ## 背景
 
-Slack で AI BOT を運用する場合、これまでは Slack独自の`mrkdwn` に変換して、文字修飾を表現していました。
+Slack で AI BOT を運用する場合、従来は Slack 独自の `mrkdwn` 形式に変換していましたが、以下の課題がありました。
 
-- LLM は一般的な Markdown を出力するため、`mrkdwn` に寄せるプロンプト制御や変換ロジックが必要
-- `mrkdwn` は Markdown 完全互換ではなく、日本語のように語間スペースがない文では記号が文字に密着しやすいため、ロジックでの検知やプロンプトでの制御が難しく、装飾記号（`**`, `*`, `~~` など）がそのまま露出しやすい
-- テーブルを表現できないため、リストへの変換して表現するなどの処理、プロンプトでの制御が必要
+- **変換コスト**: LLM は標準 Markdown を出力するため、`mrkdwn` に合わせる変換ロジックやプロンプト制御が必要
+- **装飾崩れ**: 日本語のように語間スペースがない文では、`mrkdwn` の装飾記号（`*`, `~` など）が正しくレンダリングされず記号がそのまま露出することがあり、ロジックやプロンプトでの制御も難しい
+- **テーブル非対応**: `mrkdwn` にはテーブル構文がなく、リストへ変換するなどの代替処理が必要
 
-この結果、Web の ChatGPT などと比べて、Slack 上の可読性・視認性が下がりやすいという課題がありました。
+## 設計方針
 
-## このライブラリが解決すること
+Slack Block Kit の `markdown` ブロック（標準 Markdown 構文をそのまま受け付ける）と `table` ブロックを活用し、上記の課題を解消します。
 
-Slack の `markdown` / `table` ブロックを用いて、LLM が出力する標準的な Markdown をSlackでレンダリング可能な形式に変換します。
+| 課題 | 解決手段 |
+|---|---|
+| 変換コスト | `markdown` ブロックが標準 Markdown をそのまま受け付けるため、LLM 出力を変換せず利用可能 |
+| 装飾崩れ | 装飾記号の前後に ZWSP（ゼロ幅スペース U+200B）を自動挿入してレンダリングを安定化。通常の半角スペースではなくゼロ幅スペースを使うことで、見た目上の不自然な空白を生じさせずに Slack の装飾解析を補助する |
+| テーブル非対応 | Markdown テーブルを検知して `table` ブロックに変換。LLM の出力する多様なテーブル記法の揺れも自動補完し `invalid_blocks` エラーを回避 |
 
-- 一般的な Markdown テキストを `markdown` ブロックとして変換
-- テーブルを検知して `table` ブロック化
-- Tableブロックは「1メッセージ1テーブル」の制限があるため、テーブルごとにブロックを自動分割してメッセージを生成
-- Tableブロック仕様で受け付けない、壊れたテーブル記法（外枠パイプ不足、separator不足、列数不一致）や空セルを `-` で補完して `invalid_blocks` エラーを回避
-- 装飾記号まわりの表示崩れを抑えるため ZWSP を付与（コードブロックは除外し、inline code は補完対象）
-- `chat.postMessage.text` 用の fallback テキストを再構築（通知プレビューや一部クライアント向けに、`blocks`内容をプレーンテキストへ展開）
+## 主な機能
 
-## 利用前提（重要）
+- 標準 Markdown テキストを `markdown` ブロックに変換
+- Markdown テーブルを `table` ブロックに変換（セル内の太字・斜体・取消線・インラインコードを認識）
+- LLM が生成する多様な Markdown テーブルで起こり得る記法の揺れ（外枠パイプ不足、セパレータ行不足、列数不一致、空セル）を検知し自動補完。Slack `table` ブロックの `invalid_blocks` エラーを未然に回避
+- テーブルごとにメッセージを自動分割（Slack の「1メッセージ1テーブル」制約に対応）
+- 装飾記号の前後に ZWSP を付与して表示崩れを抑制（フェンスドコードブロック内は除外、インラインコードは付与対象）
+- `chat.postMessage.text` 用の fallback テキストを生成（ブロック内容をプレーンテキスト化して通知プレビュー等に利用）
 
-- このライブラリは Slack Block Kit の `blocks` で `markdown` / `table` ブロックを送信できる実装を前提とします。
-- `text` / `mrkdwn` しか送信できないツールでは、本ライブラリの主機能（`table` ブロック変換、`markdown` ブロック前提の整形）は利用できません。
-- 例: Claude Code Plugin の Slack MCP のように `mrkdwn` 送信に限定される経路では、実質的に本ライブラリは適用できません。
+## 利用前提
+
+- Slack Block Kit の `blocks` で `markdown` / `table` ブロックを送信できる実装が必要です。
+- `text` / `mrkdwn` のみ送信可能な経路（例: 一部の Slack MCP ツール）では利用できません。
 
 ## インストール
 
@@ -69,8 +74,8 @@ for blocks in convert_markdown_to_slack_messages(markdown):
 ````markdown
 # 週次プロダクト更新
 
-今週は**検索速度改善**と*UI調整*を進めました。旧仕様は~~廃止予定~~です。  
-詳細ログIDは`run-20260305-02`です。  
+今週は**検索速度改善**と*UI調整*を進めました。旧仕様は~~廃止予定~~です。
+詳細ログIDは`run-20260305-02`です。
 参考: https://example.com/changelog
 
 - APIの**レスポンス改善**
@@ -105,20 +110,30 @@ QA | ~~保留~~ | Team C
 
 ## 公開 API
 
-- `convert_markdown_to_slack_blocks(markdown_text: str) -> list[dict]`
-- `convert_markdown_to_slack_messages(markdown_text: str) -> list[list[dict]]`
-- `build_fallback_text_from_blocks(blocks: list[dict]) -> str`
-- `blocks_to_plain_text(blocks: list[dict]) -> str`
-- `normalize_markdown_tables(markdown_text: str) -> str`
-- `add_zero_width_spaces_to_markdown(text: str) -> str`
-- `decode_html_entities(text: str) -> str`
-- `strip_zero_width_spaces(text: str) -> str`
+### メイン関数
+
+| 関数 | 説明 |
+|---|---|
+| `convert_markdown_to_slack_messages(markdown_text) → list[list[dict]]` | Markdown をテーブル分割済みのメッセージ群に変換（主要エントリポイント） |
+| `convert_markdown_to_slack_blocks(markdown_text) → list[dict]` | Markdown を Block Kit ブロックのリストに変換 |
+| `build_fallback_text_from_blocks(blocks) → str` | ブロックから `chat.postMessage.text` 用 fallback テキストを生成 |
+| `blocks_to_plain_text(blocks) → str` | ブロックからプレーンテキストを生成 |
+
+### ユーティリティ
+
+| 関数 | 説明 |
+|---|---|
+| `normalize_markdown_tables(markdown_text) → str` | テーブル記法を正規化（パイプ補完、セパレータ生成、列数調整） |
+| `add_zero_width_spaces_to_markdown(text) → str` | 装飾記号の前後に ZWSP を挿入（フェンスドコードブロック内は除外） |
+| `decode_html_entities(text) → str` | HTML エンティティをデコード |
+| `strip_zero_width_spaces(text) → str` | ZWSP (U+200B) と BOM (U+FEFF) を除去（ZWJ 等の結合制御文字は保持） |
 
 ## 仕様
 
 - 挙動仕様: [docs/spec.md](docs/spec.md)
-- 非ゴール: `mrkdwn` 文字列生成
-- 非対応: `mrkdwn` のみ送信可能なクライアント／MCPツール
+- 非対応:
+  - `mrkdwn` 文字列の生成
+  - `mrkdwn` のみ送信可能なクライアント／MCP ツール
 
 ## 連絡先
 

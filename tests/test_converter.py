@@ -141,3 +141,35 @@ def test_slack_link_in_table_cell_keeps_single_cell() -> None:
     row = table["rows"][1]
     assert len(row) == 2
     assert extract_plain_text_from_table_cell(row[1]) == "<https://example.com|Example>"
+
+
+def test_zwj_preserved_in_table_cell() -> None:
+    raw = "| Name | Icon |\n|---|---|\n| Engineer | \U0001f468\u200d\U0001f4bb |\n"
+
+    table = _first_table(convert_markdown_to_slack_blocks(raw))
+    cell_text = extract_plain_text_from_table_cell(table["rows"][1][1])
+    assert "\u200d" in cell_text
+
+
+def test_zwnj_preserved_in_table_cell() -> None:
+    raw = "| Name | Word |\n|---|---|\n| Persian | \u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645 |\n"
+
+    table = _first_table(convert_markdown_to_slack_blocks(raw))
+    cell_text = extract_plain_text_from_table_cell(table["rows"][1][1])
+    assert "\u200c" in cell_text
+
+
+def test_heading_with_inline_code_pipe_is_not_split() -> None:
+    raw = "# Title `a|b`\n\nsome text\n"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+    assert all(b.get("type") == "markdown" for b in blocks)
+    assert "Title" in blocks[0].get("text", "")
+
+
+def test_escaped_pipe_in_table_cell_strips_backslash() -> None:
+    raw = "| Expr | Desc |\n|---|---|\n| A \\| B | OR |\n"
+
+    table = _first_table(convert_markdown_to_slack_blocks(raw))
+    cell_text = extract_plain_text_from_table_cell(table["rows"][1][0])
+    assert cell_text == "A | B"
