@@ -30,6 +30,12 @@ Slack の `markdown` / `table` ブロックを前提に、LLM が出力しがち
 pip install slack-markdown-parser
 ```
 
+## 利用前提（重要）
+
+- このライブラリは Slack Block Kit の `blocks` で `markdown` / `table` ブロックを送信できる実装を前提とします。
+- `text` / `mrkdwn` しか送信できないツールでは、本ライブラリの主機能（`table` ブロック変換、`markdown` ブロック前提の整形）は利用できません。
+- 例: Claude Code Plugin の Slack MCP のように `mrkdwn` 送信に限定される経路では、実質的に本ライブラリは適用できません。
+
 ## 最小利用例
 
 ```python
@@ -113,6 +119,7 @@ QA | ~~保留~~ | Team C
 
 - 挙動仕様: [docs/spec.md](docs/spec.md)
 - 非ゴール: `mrkdwn` 文字列生成
+- 非対応: `mrkdwn` のみ送信可能なクライアント／MCPツール
 
 ## 連絡先
 
