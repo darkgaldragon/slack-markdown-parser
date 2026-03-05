@@ -110,6 +110,26 @@ def test_inline_code_without_spaces_is_padded_with_zwsp() -> None:
     assert "詳細ログIDは\u200b`run-20260305-02`\u200bです。" == converted
 
 
+def test_bold_with_punctuation_on_only_one_side_is_wrapped_on_both_sides() -> None:
+    text = (
+        "GDPval は **70.9%→83.0%**、"
+        "Investment Banking Modeling Tasks は **68.4%→87.3%**。"
+    )
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert (
+        "GDPval は \u200b**70.9%→83.0%**\u200b、"
+        "Investment Banking Modeling Tasks は \u200b**68.4%→87.3%**\u200b。"
+    ) == converted
+
+
+def test_bold_with_tight_boundary_on_left_is_wrapped_on_both_sides() -> None:
+    text = "特に伸びが大きいのは、**実務系** と **ツール連携** ね。"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert "特に伸びが大きいのは、\u200b**実務系**\u200b と **ツール連携** ね。" == converted
+
+
 def test_blocks_to_plain_text_and_fallback_generation() -> None:
     raw = """# Title
 

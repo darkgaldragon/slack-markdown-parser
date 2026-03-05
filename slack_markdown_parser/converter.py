@@ -45,10 +45,16 @@ def add_zero_width_spaces_to_markdown(text: str) -> str:
 
     def wrap_match(match: re.Match[str], source: str) -> str:
         start, end = match.start(), match.end()
-        prefix_needed = start == 0 or source[start - 1] not in boundary_chars
-        suffix_needed = end >= len(source) or source[end] not in boundary_chars
-        prefix = ZWSP if prefix_needed else ""
-        suffix = ZWSP if suffix_needed else ""
+        before_safe = start > 0 and source[start - 1] in boundary_chars
+        after_safe = end < len(source) and source[end] in boundary_chars
+        if before_safe and after_safe:
+            return match.group(0)
+
+        # When either outer edge is tightly coupled to surrounding text or
+        # punctuation, wrap the whole token so Slack can treat the decoration
+        # as a standalone span.
+        prefix = ZWSP
+        suffix = ZWSP
         return f"{prefix}{match.group(0)}{suffix}"
 
     def wrap_segment(segment: str) -> str:
@@ -67,7 +73,7 @@ def add_zero_width_spaces_to_markdown(text: str) -> str:
                 segment,
                 flags=re.DOTALL,
             )
-        return segment
+        return re.sub(f"{ZWSP}+", ZWSP, segment)
 
     code_fence_pattern = r"(```.*?```)"
     parts = re.split(code_fence_pattern, text, flags=re.DOTALL)
