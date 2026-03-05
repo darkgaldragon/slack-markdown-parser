@@ -5,6 +5,9 @@ on:
     branches: ["**"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -38,9 +41,6 @@ jobs:
 
   security:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -71,19 +71,68 @@ jobs:
       - name: Regex secret scan (working tree)
         run: |
           set -euo pipefail
-          SECRET_REGEX='(AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|xox[baprs]-[0-9A-Za-z-]{20,}|AIza[0-9A-Za-z\-_]{35}|-----BEGIN (RSA|EC|DSA|OPENSSH) PRIVATE KEY-----|aws_secret_access_key\s*[:=]\s*[A-Za-z0-9/+=]{20,})'
-          if rg -n --hidden --glob '!.git' --pcre2 "$SECRET_REGEX" .; then
-            echo "::error::Potential secret detected by regex gate."
-            exit 1
-          fi
+          python - <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          secret_regex = re.compile(
+              r"(AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|xox[baprs]-[0-9A-Za-z-]{20,}|AIza[0-9A-Za-z\-_]{35}|-----BEGIN (RSA|EC|DSA|OPENSSH) PRIVATE KEY-----|aws_secret_access_key\s*[:=]\s*[A-Za-z0-9/+=]{20,})"
+          )
+          excluded_dirs = {".git", ".venv", "venv", "__pycache__", "build", "dist", "python"}
+          hits = []
+
+          for path in pathlib.Path(".").rglob("*"):
+              if not path.is_file():
+                  continue
+              if any(part in excluded_dirs for part in path.parts):
+                  continue
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except Exception:
+                  continue
+              for match in secret_regex.finditer(text):
+                  line = text.count("\n", 0, match.start()) + 1
+                  snippet = match.group(0)[:80]
+                  hits.append((str(path), line, snippet))
+                  if len(hits) >= 20:
+                      break
+              if len(hits) >= 20:
+                  break
+
+          if hits:
+              print("::error::Potential secret detected by regex gate.")
+              for file_path, line_no, snippet in hits:
+                  print(f"{file_path}:{line_no}: {snippet}")
+              sys.exit(1)
+
+          print("No secret-like patterns detected by regex gate.")
+          PY
       - name: Install gitleaks
         run: |
           set -euo pipefail
           VERSION="8.28.0"
+          ARCHIVE="gitleaks_${VERSION}_linux_x64.tar.gz"
+          CHECKSUM_FILE="gitleaks_${VERSION}_checksums.txt"
+          BASE_URL="https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}"
+          TMP_DIR="${RUNNER_TEMP}/gitleaks-download"
           INSTALL_DIR="${RUNNER_TEMP}/gitleaks-bin"
+          mkdir -p "${TMP_DIR}"
           mkdir -p "${INSTALL_DIR}"
-          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
-            | tar -xz -C "${INSTALL_DIR}" gitleaks
+
+          curl --fail-with-body --retry 5 --retry-delay 2 --retry-all-errors -sSLo "${TMP_DIR}/${ARCHIVE}" "${BASE_URL}/${ARCHIVE}"
+          curl --fail-with-body --retry 5 --retry-delay 2 --retry-all-errors -sSLo "${TMP_DIR}/${CHECKSUM_FILE}" "${BASE_URL}/${CHECKSUM_FILE}"
+          (
+            cd "${TMP_DIR}"
+            checksum_line="$(grep -F "  ${ARCHIVE}" "${CHECKSUM_FILE}" || true)"
+            if [ "$(printf '%s\n' "$checksum_line" | sed '/^$/d' | wc -l)" -ne 1 ]; then
+              echo "Unexpected number of checksum lines for ${ARCHIVE}" >&2
+              exit 1
+            fi
+            printf '%s\n' "$checksum_line" | sha256sum -c -
+          )
+
+          tar -xzf "${TMP_DIR}/${ARCHIVE}" -C "${INSTALL_DIR}" gitleaks
           chmod +x "${INSTALL_DIR}/gitleaks"
           echo "${INSTALL_DIR}" >> "$GITHUB_PATH"
       - name: Gitleaks scan (working tree)

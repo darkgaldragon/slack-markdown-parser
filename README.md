@@ -33,8 +33,10 @@ pip install slack-markdown-parser==2.*
 ### From GitHub
 
 ```bash
-pip install git+https://github.com/darkgaldragon/slack-markdown-parser.git@main
+pip install git+https://github.com/darkgaldragon/slack-markdown-parser.git@v2.0.0
 ```
+
+For reproducibility, prefer a tag (`@v2.0.0`) or commit SHA over `@main`.
 
 ### Dev install
 
@@ -184,8 +186,9 @@ If your bot currently has local formatting helpers, replace them with this packa
 
 ```python
 # local implementations in lambda_function.py / handlers/slack.py
-blocks = convert_markdown_to_slack_messages(text)
-fallback = blocks_to_plain_text(blocks)
+messages = convert_markdown_to_slack_messages(text)
+for blocks in messages:
+    fallback = blocks_to_plain_text(blocks)
 ```
 
 ### After
@@ -196,8 +199,9 @@ from slack_markdown_parser import (
     blocks_to_plain_text,
 )
 
-blocks = convert_markdown_to_slack_messages(text)
-fallback = blocks_to_plain_text(blocks)
+messages = convert_markdown_to_slack_messages(text)
+for blocks in messages:
+    fallback = blocks_to_plain_text(blocks)
 ```
 
 Recommended rollout:
@@ -218,6 +222,7 @@ See [LAMBDA_INTEGRATION_GUIDE.md](LAMBDA_INTEGRATION_GUIDE.md).
 - Release process: [RELEASE.md](RELEASE.md)
 - Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Support channels: [SUPPORT.md](SUPPORT.md)
+- Public-share checklist (GitHub beginners): [docs/OSS_RELEASE_CHECKLIST.md](docs/OSS_RELEASE_CHECKLIST.md)
 
 ## License
 
