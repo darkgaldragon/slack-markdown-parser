@@ -1,66 +1,66 @@
-# Parser Behavior Specification
+# パーサー挙動仕様
 
-This document defines deterministic behavior for `slack-markdown-parser` v2.x.
+このドキュメントは `slack-markdown-parser` v2.x の決定的な挙動を定義します。
 
-## Input
+## 入力
 
-- UTF-8 markdown string
-- May contain malformed tables, HTML entities, and mixed plain text
+- UTF-8 の Markdown 文字列
+- 不正形テーブル、HTMLエンティティ、プレーンテキスト混在を許容
 
-## Output
+## 出力
 
-- Slack Block Kit blocks (`markdown` / `table`)
-- For multi-table input: message groups with max one table per message
+- Slack Block Kit ブロック（`markdown` / `table`）
+- 複数テーブル入力時は「1メッセージ1テーブル」を満たすメッセージ群
 
-## Conversion Pipeline
+## 変換パイプライン
 
-1. Decode HTML entities (`&gt;`, `&amp;`, ...)
-2. Normalize markdown tables
-3. Segment markdown into table and non-table regions
-4. Convert table segments to Slack `table` blocks
-5. Convert text segments to Slack `markdown` blocks
-6. Add zero-width-space around markdown decorators (outside code)
-7. Split blocks by table constraint
+1. HTMLエンティティをデコード（`&gt;`, `&amp;` など）
+2. Markdownテーブルを正規化
+3. テーブル領域と非テーブル領域に分割
+4. テーブル領域を Slack `table` ブロックへ変換
+5. 非テーブル領域を Slack `markdown` ブロックへ変換
+6. コード領域以外で装飾記号周辺に ZWSP を付与
+7. テーブル制約に沿ってメッセージ分割
 
-## Table Normalization Rules
+## テーブル正規化ルール
 
-- Requires at least 2 candidate rows to be recognized as table block
-- Header/rows are pipe-completed (`|...|`) if needed
-- Separator row is generated when missing
-- Row columns are padded/truncated to header width
-- Empty cell values become `-`
-- Heading+table single line (`# H |a|b|`) is split into heading + table row
+- テーブル判定には2行以上の候補行が必要
+- 必要に応じて行の外枠パイプ（`|...|`）を補完
+- セパレータ行が欠けていれば自動生成
+- 行の列数はヘッダ幅に合わせて不足分を補完・超過分を切り詰め
+- 空セルは `-` に置換
+- `# 見出し |a|b|` 形式は見出しと表行へ分離
 
-## Table Cell Styling
+## テーブルセル装飾
 
-Within table cells, parser recognizes:
+セル内で次を認識:
 - `**bold**`
 - `*italic*`
 - `~~strike~~`
 - `` `code` ``
 
-Unsupported nested/complex syntax is preserved as plain text.
+複雑/深いネストはプレーンテキストとして保持。
 
-## Markdown Decoration Stability
+## Markdown装飾の安定化
 
-`add_zero_width_spaces_to_markdown` inserts ZWSP around decoration markers for stable Slack rendering.
+`add_zero_width_spaces_to_markdown` は Slack 表示安定化のため装飾記号周辺へ ZWSP を挿入。
 
-Exclusions:
-- fenced code blocks
-- inline code segments
+除外対象:
+- フェンスドコードブロック
+- インラインコード
 
-## Fallback Text
+## fallback テキスト
 
-`build_fallback_text_from_blocks` reconstructs readable plain text:
-- markdown blocks => text (ZWSP stripped)
-- table blocks => rows joined by ` | `
+`build_fallback_text_from_blocks` は可読なプレーンテキストを再構築:
+- `markdown` ブロック -> ZWSP 除去後のテキスト
+- `table` ブロック -> 行ごとに ` | ` 連結
 
-## Determinism
+## 決定性
 
-Given identical input, output blocks must be stable across environments.
+同一入力に対して、環境差分に依存せず安定した出力を返すこと。
 
-## Non-goals
+## 非ゴール
 
-- `mrkdwn` output generation
-- full markdown AST fidelity
-- HTML rendering semantics
+- `mrkdwn` 文字列生成
+- 完全な Markdown AST 再現
+- HTML レンダリング互換
