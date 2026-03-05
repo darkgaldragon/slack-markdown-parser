@@ -19,37 +19,37 @@ def _first_table(blocks: list[dict]) -> dict:
 
 
 def test_normalize_adds_outer_pipes_and_separator() -> None:
-    raw = """学部 | 1時限 | 2時限 | 3時限
+    raw = """カテゴリ | 枠1 | 枠2 | 枠3
 ---|---|---|---
-経済学部 | 英語 | 国語 | 地歴・公民・数学
-理工学部 | 英語 | 数学 | 理科
+グループA | alpha | beta | gamma
+グループB | alpha | delta | epsilon
 """
 
     normalized = normalize_markdown_tables(raw)
     lines = normalized.splitlines()
 
-    assert lines[0] == "|学部|1時限|2時限|3時限|"
+    assert lines[0] == "|カテゴリ|枠1|枠2|枠3|"
     assert lines[1] == "|---|---|---|---|"
-    assert lines[2].startswith("|経済学部")
+    assert lines[2].startswith("|グループA")
 
 
 def test_normalize_without_separator_still_generates_separator() -> None:
-    raw = """学部 | 1時限 | 2時限
-経済学部 | 英語 | 国語
-理工学部 | 英語 | 数学
+    raw = """カテゴリ | 枠1 | 枠2
+グループA | alpha | beta
+グループB | alpha | delta
 """
 
     normalized = normalize_markdown_tables(raw)
     lines = normalized.splitlines()
 
-    assert lines[0] == "|学部|1時限|2時限|"
+    assert lines[0] == "|カテゴリ|枠1|枠2|"
     assert lines[1] == "|---|---|---|"
-    assert lines[2] == "|経済学部|英語|国語|"
+    assert lines[2] == "|グループA|alpha|beta|"
 
 
 def test_heading_inline_with_table_is_split() -> None:
-    raw = """### 見出しつきの表 学部 | 1時限 | 2時限
-経済学部 | 英語 | 国語
+    raw = """### 見出しつきの表 カテゴリ | 枠1 | 枠2
+グループA | alpha | beta
 """
 
     blocks = convert_markdown_to_slack_blocks(raw)
@@ -61,13 +61,13 @@ def test_heading_inline_with_table_is_split() -> None:
     headers = [
         extract_plain_text_from_table_cell(cell) for cell in table_blocks[0]["rows"][0]
     ]
-    assert headers == ["学部", "1時限", "2時限"]
+    assert headers == ["カテゴリ", "枠1", "枠2"]
 
 
 def test_empty_table_cell_is_filled_with_dash() -> None:
     raw = """| Name | Status |
 |---|---|
-| Amy | |
+| UserA | |
 """
 
     table = _first_table(convert_markdown_to_slack_blocks(raw))
@@ -108,7 +108,7 @@ def test_blocks_to_plain_text_and_fallback_generation() -> None:
 
 | Name | Score |
 |---|---|
-| Amy | 100 |
+| UserA | 100 |
 """
 
     blocks = convert_markdown_to_slack_blocks(raw)
@@ -117,7 +117,7 @@ def test_blocks_to_plain_text_and_fallback_generation() -> None:
 
     assert "Title" in plain
     assert "Name | Score" in plain
-    assert "Amy | 100" in fallback
+    assert "UserA | 100" in fallback
 
 
 def test_decode_html_entities() -> None:
