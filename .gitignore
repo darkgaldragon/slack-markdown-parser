@@ -12,6 +12,7 @@ dist/
 pip-wheel-metadata/
 
 # Local test outputs
+tests/
 .pytest_cache/
 .coverage
 .coverage.*
