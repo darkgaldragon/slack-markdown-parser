@@ -1,40 +1,39 @@
 # slack-markdown-parser
 
-LLM が生成した Markdown を Slack Block Kit（`markdown` + `table`）に変換し、Slack 上で破綻しにくく表示する Python ライブラリです。
+LLM が生成する一般的な Markdown を Slack Block Kit（`markdown` + `table`）に変換し、Slack 上で適切にMarkdown表現ができるようにする Python ライブラリです。
 
 ## 背景
 
-Slack の AI BOT 運用では、これまで `mrkdwn` 中心の実装が一般的でした。
+Slack で AI BOT を運用する場合、これまでは Slack独自の`mrkdwn` に変換して、文字修飾を表現していました。
 
 - LLM は一般的な Markdown を出力するため、`mrkdwn` に寄せるプロンプト制御や変換ロジックが必要
-- `mrkdwn` は独自仕様が厳密で、条件を外すと装飾記号（`**`, `*`, `~~` など）がそのまま露出しやすい
-- テーブルをそのまま扱えないため、箇条書きへの変換など追加処理が必要
+- `mrkdwn` の厳密な独自仕様（`**`タグの外側にスペースが必要など）により、ロジックでの検知やプロンプトでの制御が難しく、装飾記号（`**`, `*`, `~~` など）がそのまま露出しやすい
+- テーブルを表現できないため、リストへの変換して表現するなどの処理、プロンプトでの制御が必要
 
 この結果、Web の ChatGPT などと比べて、Slack 上の可読性・視認性が下がりやすいという課題がありました。
 
 ## このライブラリが解決すること
 
-Slack の `markdown` / `table` ブロックを前提に、LLM が出力しがちな Markdown を実運用向けに整形して返します。
+Slack の `markdown` / `table` ブロックを用いて、LLM が出力する標準的な Markdown をSlackでレンダリング可能な形式に変換します。
 
 - 一般的な Markdown テキストを `markdown` ブロックとして変換
 - テーブルを検知して `table` ブロック化
-- 壊れたテーブル記法（外枠パイプ不足、separator不足、列数不一致）を補正
-- 空セルを `-` で補完して `invalid_blocks` を回避
+- Tableブロックは「1メッセージ1テーブル」の制限があるため、テーブルごとにブロックを自動分割してメッセージを生成
+- Tableブロック仕様で受け付けない、壊れたテーブル記法（外枠パイプ不足、separator不足、列数不一致）や空セルを `-` で補完して `invalid_blocks` エラーを回避
 - 装飾記号まわりの表示崩れを抑えるため ZWSP を付与（コード領域は除外）
-- Slack 制約に合わせて「1メッセージ1テーブル」に自動分割
 - `chat.postMessage.text` 用の fallback テキストを再構築
-
-## インストール
-
-```bash
-pip install slack-markdown-parser
-```
 
 ## 利用前提（重要）
 
 - このライブラリは Slack Block Kit の `blocks` で `markdown` / `table` ブロックを送信できる実装を前提とします。
 - `text` / `mrkdwn` しか送信できないツールでは、本ライブラリの主機能（`table` ブロック変換、`markdown` ブロック前提の整形）は利用できません。
 - 例: Claude Code Plugin の Slack MCP のように `mrkdwn` 送信に限定される経路では、実質的に本ライブラリは適用できません。
+
+## インストール
+
+```bash
+pip install slack-markdown-parser
+```
 
 ## 最小利用例
 
