@@ -30,7 +30,7 @@ def decode_html_entities(text: str) -> str:
 
 def strip_zero_width_spaces(text: str) -> str:
     """Strip zero-width spaces from text."""
-    return re.sub(r"[\u200B-\u200D\uFEFF]", "", text or "")
+    return re.sub(r"[\u200B\uFEFF]", "", text or "")
 
 
 def add_zero_width_spaces_to_markdown(text: str) -> str:
@@ -142,7 +142,15 @@ def _split_heading_and_table_row(line: str) -> Optional[tuple[str, str]]:
     if "|" not in line:
         return None
 
-    first_pipe = line.find("|")
+    in_code = False
+    first_pipe = -1
+    for i, ch in enumerate(line):
+        if ch == "`":
+            in_code = not in_code
+        elif ch == "|" and not in_code:
+            first_pipe = i
+            break
+
     if first_pipe < 0:
         return None
 
@@ -279,6 +287,7 @@ def looks_like_markdown_table(text: str) -> bool:
 def _create_table_cell(text: str) -> Dict[str, Any]:
     """Build Slack rich_text cell from markdown fragment."""
     clean_text = strip_zero_width_spaces(text or "")
+    clean_text = clean_text.replace("\\|", "|")
     if not clean_text.strip():
         clean_text = "-"
     elements: List[Dict[str, Any]] = []
