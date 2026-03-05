@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- Removed internal code-review report from published docs to keep OSS documentation user-focused.
+- Added `docs/README.md` as a documentation index for public references.
+- Updated README code sample to use environment variable token input (`SLACK_BOT_TOKEN`).
+
 ## [2.0.0] - 2026-03-05
 
 ### Added

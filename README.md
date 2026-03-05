@@ -47,6 +47,8 @@ pip install -e ".[dev]"
 ## Quick Start (3 minutes)
 
 ```python
+import os
+
 from slack_markdown_parser import (
     convert_markdown_to_slack_messages,
     build_fallback_text_from_blocks,
@@ -62,7 +64,10 @@ markdown = """
 | UI | *In progress* |
 """
 
-client = WebClient(token="xoxb-...")
+token = os.getenv("SLACK_BOT_TOKEN")
+if not token:
+    raise RuntimeError("Set SLACK_BOT_TOKEN before running this example.")
+client = WebClient(token=token)
 
 for blocks in convert_markdown_to_slack_messages(markdown):
     client.chat_postMessage(
@@ -168,6 +173,8 @@ Limitations:
 - `mrkdwn` output mode is intentionally not provided
 
 See full details in [docs/spec.md](docs/spec.md).
+
+Additional public docs index: [docs/README.md](docs/README.md).
 
 ## Migration Guide (existing bots)
 
