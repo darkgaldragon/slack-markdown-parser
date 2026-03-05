@@ -1,214 +1,217 @@
-# Slack Markdown Parser
+# slack-markdown-parser
 
-LLMが生成した純粋なMarkdownテキストをSlackの`markdown`ブロックと`table`ブロックに自動変換するPythonライブラリ
+Convert LLM-generated Markdown into Slack Block Kit messages (`markdown` + `table` blocks).
 
-## 特徴
+日本語: LLMのMarkdown出力をSlack向けBlock Kit (`markdown` / `table`) に安全変換するPythonライブラリです。
 
-- ✅ 標準Markdown記法をSlackで表示可能に変換
-- ✅ Markdownテーブルを自動検出してSlack tableブロックに変換
-- ✅ 太字、斜体、取り消し線に自動的にゼロ幅スペースを挿入
-- ✅ テーブルセル内のMarkdown装飾を自動解析
-- ✅ 複数テーブルがある場合は自動的にメッセージを分割
-- ✅ 依存関係なし（標準ライブラリのみ使用）
+## What / Why
 
-## インストール
+Slack rendering is strict in production:
+- only one `table` block per message
+- empty table cells can trigger `invalid_blocks`
+- markdown decorations can become unstable without zero-width-space padding
 
-### Lambda Layerとして使用する場合
+This package standardizes those edge cases into one reusable converter so Cloud Run, AWS Lambda, and local workers can use the same behavior.
 
-```bash
-# パッケージをビルド
-cd slack-markdown-parser
-pip install . -t python/
-zip -r slack-markdown-parser-layer.zip python/
+日本語: Slack固有の制約（1メッセージ1テーブル、空セル、装飾崩れ）を吸収して共通化します。
 
-# AWS CLIでLayerを作成
-aws lambda publish-layer-version \
-    --layer-name slack-markdown-parser \
-    --zip-file fileb://slack-markdown-parser-layer.zip \
-    --compatible-runtimes python3.8 python3.9 python3.10 python3.11
-```
+## Compatibility
 
-### ローカル開発環境にインストール
+- Python: `3.10+`
+- Runtime: Cloud Run / AWS Lambda / local scripts
+- Output: **Slack Block Kit only** (`markdown` and `table` blocks)
+- Not included: `mrkdwn` string generator
+
+## Installation
+
+### PyPI (recommended)
 
 ```bash
-pip install slack-markdown-parser
+pip install slack-markdown-parser==2.*
 ```
 
-または、開発版をインストール：
+### From GitHub
+
+```bash
+pip install git+https://github.com/darkgaldragon/slack-markdown-parser.git@main
+```
+
+### Dev install
 
 ```bash
 git clone https://github.com/darkgaldragon/slack-markdown-parser.git
 cd slack-markdown-parser
-pip install -e .
+pip install -e ".[dev]"
 ```
 
-## 使い方
-
-### 基本的な使用方法
+## Quick Start (3 minutes)
 
 ```python
-from slack_markdown_parser import convert_markdown_to_slack_blocks
+from slack_markdown_parser import (
+    convert_markdown_to_slack_messages,
+    build_fallback_text_from_blocks,
+)
+from slack_sdk import WebClient
 
-markdown_text = """
-# プロジェクト進捗
+markdown = """
+# Weekly Report
 
-これは**重要**な情報です。
-
-| タスク | ステータス |
-|--------|-----------|
-| **API開発** | *進行中* |
-| UI設計 | ~~保留~~ → *進行中* |
+| Team | Status |
+|---|---|
+| API | **On track** |
+| UI | *In progress* |
 """
 
-# Slack blocksに変換
-blocks = convert_markdown_to_slack_blocks(markdown_text)
+client = WebClient(token="xoxb-...")
 
-# Slack APIで送信
-from slack_sdk import WebClient
-client = WebClient(token="YOUR_TOKEN")
-client.chat_postMessage(
-    channel="C06TB295SNA",
-    blocks=blocks,
-    text="プロジェクト進捗"
-)
+for blocks in convert_markdown_to_slack_messages(markdown):
+    client.chat_postMessage(
+        channel="C123456",
+        blocks=blocks,
+        text=build_fallback_text_from_blocks(blocks) or "report",
+    )
 ```
 
-### 複数テーブルがある場合
+## API
+
+### `convert_markdown_to_slack_blocks(markdown_text: str) -> list[dict]`
+Convert markdown text into one block array.
+
+### `convert_markdown_to_slack_messages(markdown_text: str) -> list[list[dict]]`
+Convert markdown text into multiple message payloads (automatically split for table constraints).
+
+### `build_fallback_text_from_blocks(blocks: list[dict]) -> str`
+Build plain fallback text from blocks (recommended for `chat_postMessage.text`).
+
+### `blocks_to_plain_text(blocks: list[dict]) -> str`
+Flatten block contents into readable plain text.
+
+### `normalize_markdown_tables(markdown_text: str) -> str`
+Normalize table pipes/separators and column width before conversion.
+
+### `add_zero_width_spaces_to_markdown(text: str) -> str`
+Insert zero-width-space around markdown decorations while preserving code sections.
+
+### `decode_html_entities(text: str) -> str`
+Decode entities like `&gt;` before parsing.
+
+### `strip_zero_width_spaces(text: str) -> str`
+Remove inserted ZWSP characters for fallback/plain output.
+
+## API Examples
+
+### Single table -> one message payload
 
 ```python
 from slack_markdown_parser import convert_markdown_to_slack_messages
 
-markdown_text = """
-# レポート
+md = """
+| Name | Score |
+|---|---|
+| Amy | 100 |
+"""
 
-## テーブル1
+messages = convert_markdown_to_slack_messages(md)
+assert len(messages) == 1
+assert messages[0][0]["type"] == "table"
+```
+
+### Multiple tables -> split messages (one table per message)
+
+```python
+from slack_markdown_parser import convert_markdown_to_slack_messages
+
+md = """
+# Report
 | A | B |
 |---|---|
 | 1 | 2 |
 
-## テーブル2
+text between tables
+
 | C | D |
 |---|---|
 | 3 | 4 |
 """
 
-# 複数のメッセージに自動分割
-messages = convert_markdown_to_slack_messages(markdown_text)
-
-# 各メッセージを順番に送信
-for i, blocks in enumerate(messages):
-    client.chat_postMessage(
-        channel="C06TB295SNA",
-        blocks=blocks,
-        text=f"レポート - Part {i+1}"
-    )
+messages = convert_markdown_to_slack_messages(md)
+# table messages are automatically split to satisfy Slack constraints
 ```
 
-### Lambda関数での使用例
+### Build fallback text from blocks
 
 ```python
-import json
-from slack_markdown_parser import convert_markdown_to_slack_messages
-from slack_sdk import WebClient
+from slack_markdown_parser import (
+    build_fallback_text_from_blocks,
+    convert_markdown_to_slack_blocks,
+)
 
-def lambda_handler(event, context):
-    # LLMが生成したMarkdownテキスト
-    markdown_text = event.get('markdown_text', '')
-    
-    # Slack blocksに変換
-    messages = convert_markdown_to_slack_messages(markdown_text)
-    
-    # Slackに送信
-    client = WebClient(token=os.environ['SLACK_BOT_TOKEN'])
-    channel_id = os.environ['SLACK_CHANNEL_ID']
-    
-    for blocks in messages:
-        client.chat_postMessage(
-            channel=channel_id,
-            blocks=blocks,
-            text="LLM Response"
-        )
-    
-    return {
-        'statusCode': 200,
-        'body': json.dumps({'messages_sent': len(messages)})
-    }
+blocks = convert_markdown_to_slack_blocks("# Title\n\n| Name | Score |\n|---|---|\n| Amy | 100 |")
+fallback = build_fallback_text_from_blocks(blocks)
 ```
 
-## API リファレンス
+## Behavior Spec (summary)
 
-### `convert_markdown_to_slack_blocks(markdown_text: str) -> List[Dict[str, Any]]`
+Supported:
+- headings, lists, quotes, code fences, inline code
+- markdown tables -> Slack `table` blocks
+- style in table cells: bold/italic/strike/code
 
-Markdownテキストを1つのSlack blocks配列に変換します。
+Automatic safeguards:
+- table normalization (outer pipes, separator row, column alignment)
+- empty table cell replacement with `-`
+- one-table-per-message split
+- stable markdown decoration padding
 
-**引数:**
-- `markdown_text` (str): 変換対象のMarkdownテキスト
+Limitations:
+- complex nested markdown in table cells is simplified
+- `mrkdwn` output mode is intentionally not provided
 
-**戻り値:**
-- `List[Dict[str, Any]]`: Slack blocks配列
+See full details in [docs/spec.md](docs/spec.md).
 
-**注意:**
-複数のテーブルが含まれる場合、Slackの制限によりエラーになる可能性があります。その場合は `convert_markdown_to_slack_messages()` を使用してください。
+## Migration Guide (existing bots)
 
-### `convert_markdown_to_slack_messages(markdown_text: str) -> List[List[Dict[str, Any]]]`
+If your bot currently has local formatting helpers, replace them with this package.
 
-Markdownテキストを複数のSlackメッセージに変換します（複数テーブル対応）。
+### Before
 
-**引数:**
-- `markdown_text` (str): 変換対象のMarkdownテキスト
+```python
+# local implementations in lambda_function.py / handlers/slack.py
+blocks = convert_markdown_to_slack_messages(text)
+fallback = blocks_to_plain_text(blocks)
+```
 
-**戻り値:**
-- `List[List[Dict[str, Any]]]`: メッセージごとに分割されたblocks配列のリスト
+### After
 
-### `add_zero_width_spaces(text: str) -> str`
+```python
+from slack_markdown_parser import (
+    convert_markdown_to_slack_messages,
+    blocks_to_plain_text,
+)
 
-Markdownの太字、斜体、取り消し線タグの前後にゼロ幅スペースを挿入します。
+blocks = convert_markdown_to_slack_messages(text)
+fallback = blocks_to_plain_text(blocks)
+```
 
-### `parse_markdown_table(table_text: str) -> List[List[str]]`
+Recommended rollout:
+1. add dependency in `requirements.txt`
+2. replace call sites
+3. add contract tests with fixed markdown inputs
+4. compare produced block JSON across services
 
-Markdownテーブルをパースして2次元配列に変換します。
+## Optional: AWS Lambda Layer
 
-### `markdown_table_to_slack_table(table_text: str) -> Dict[str, Any]`
+PyPI is the primary distribution. Layer is optional for AWS-only setups.
 
-Markdownテーブルをslack tableブロックに変換します。
+See [LAMBDA_INTEGRATION_GUIDE.md](LAMBDA_INTEGRATION_GUIDE.md).
 
-## 対応しているMarkdown記法
+## Security and Operations
 
-### ✅ 対応
+- Security policy: [SECURITY.md](SECURITY.md)
+- Release process: [RELEASE.md](RELEASE.md)
+- Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Support channels: [SUPPORT.md](SUPPORT.md)
 
-- **見出し**: `#`, `##`, `###`, etc.
-- **太字**: `**text**` (ゼロ幅スペース自動挿入)
-- **斜体**: `*text*` (ゼロ幅スペース自動挿入)
-- **取り消し線**: `~~text~~` (ゼロ幅スペース自動挿入)
-- **コード**: `` `code` ``
-- **コードブロック**: ` ```code``` `
-- **リスト**: `- item` または `1. item`
-- **引用**: `> text`
-- **リンク**: `[text](url)`
-- **水平線**: `---`, `***`, `___`
-- **テーブル**: `| A | B |` (tableブロックに変換)
+## License
 
-### ❌ 非対応
-
-- **脚注**: `[^1]`
-- **HTMLエンティティ**: `&lt;`, `&gt;`
-
-## 制限事項
-
-1. **1メッセージに1つのtableブロックのみ**: Slackの制限により、1メッセージに複数のテーブルを含めることはできません。`convert_markdown_to_slack_messages()` が自動的にメッセージを分割します。
-
-2. **ゼロ幅スペースの必要性**: 太字、斜体、取り消し線を正しく表示するには、タグの前後にゼロ幅スペース（U+200B）が必要です。このライブラリは自動的に挿入します。
-
-3. **テーブルセル内の装飾**: 太字、斜体、取り消し線、コードに対応していますが、複雑なネストは非対応です。
-
-## ライセンス
-
-MIT License
-
-## 作者
-
-darkgaldragon（ぎゃうどら）
-
-## 貢献
-
-プルリクエストを歓迎します！バグ報告や機能リクエストは Issues でお願いします。
+MIT

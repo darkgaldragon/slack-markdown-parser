@@ -1,58 +1,52 @@
-# Contributing to slack-markdown-parser
+# Contributing
 
-`slack-markdown-parser`への貢献を歓迎します！
+Thanks for contributing to `slack-markdown-parser`.
 
-## 開発環境のセットアップ
+日本語: コントリビュート歓迎です。以下の手順に沿ってください。
+
+## Development Setup
 
 ```bash
-# リポジトリをクローン
-git clone https://github.com/YOUR_USERNAME/slack-markdown-parser.git
+git clone https://github.com/darkgaldragon/slack-markdown-parser.git
 cd slack-markdown-parser
-
-# 開発用の依存関係をインストール
 pip install -e ".[dev]"
 ```
 
-## テストの実行
+## Local Checks
 
 ```bash
-# すべてのテストを実行
-pytest
-
-# カバレッジ付きで実行
-pytest --cov=slack_markdown_parser --cov-report=html
+ruff check .
+black --check .
+pytest -q
+python -m build
+twine check dist/*
 ```
 
-## コーディング規約
+## Pull Request Rules
 
-- PEP 8に従う
-- 関数とクラスにdocstringを記述
-- 型ヒントを使用（Python 3.8+）
+1. Keep changes focused and testable.
+2. Add/adjust tests for behavior changes.
+3. Update docs when public behavior changes.
+4. Do not commit secrets, local artifacts, or generated zips.
+5. Ensure CI is green before requesting review.
 
-## プルリクエストの手順
+## Commit Guidance
 
-1. このリポジトリをフォーク
-2. 新しいブランチを作成 (`git checkout -b feature/amazing-feature`)
-3. 変更をコミット (`git commit -m 'Add amazing feature'`)
-4. ブランチにプッシュ (`git push origin feature/amazing-feature`)
-5. プルリクエストを作成
+- Use clear, descriptive commit messages.
+- Mention behavior impact (parsing, fallback, compatibility) in PR body.
 
-## バグレポート
+## Security
 
-バグを見つけた場合は、以下の情報を含めてIssueを作成してください：
+- Never commit tokens/keys/credentials.
+- Run secret scans locally when possible.
+- Follow [SECURITY.md](SECURITY.md) for disclosure/reporting.
 
-- Python バージョン
-- `slack-markdown-parser` バージョン
-- 再現手順
-- 期待される動作
-- 実際の動作
+## Code Style
 
-## 機能リクエスト
+- Python 3.10+
+- Type hints where practical
+- Keep parser behavior deterministic
 
-新機能の提案も歓迎します！Issueで以下を説明してください：
+## Questions
 
-- 機能の説明
-- ユースケース
-- 実装案（あれば）
-
-ありがとうございます！
+Open a discussion/issue via [SUPPORT.md](SUPPORT.md).

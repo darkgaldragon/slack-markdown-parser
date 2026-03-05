@@ -1,143 +1,136 @@
-"""
-Tests for slack_markdown_parser.converter
-"""
+"""Tests for slack_markdown_parser.converter."""
 
-import pytest
+from __future__ import annotations
+
 from slack_markdown_parser import (
+    add_zero_width_spaces_to_markdown,
+    blocks_to_plain_text,
+    build_fallback_text_from_blocks,
     convert_markdown_to_slack_blocks,
     convert_markdown_to_slack_messages,
-    add_zero_width_spaces,
-    parse_markdown_table,
+    decode_html_entities,
+    extract_plain_text_from_table_cell,
+    normalize_markdown_tables,
 )
 
 
-def test_add_zero_width_spaces():
-    """ゼロ幅スペースの挿入テスト"""
-    ZWSP = "\u200b"
-    
-    # 太字
-    result = add_zero_width_spaces("これは**重要**です")
-    assert ZWSP in result
-    assert "**重要**" in result
-    
-    # 斜体
-    result = add_zero_width_spaces("これは*参考*です")
-    assert ZWSP in result
-    assert "*参考*" in result
-    
-    # 取り消し線
-    result = add_zero_width_spaces("これは~~削除~~です")
-    assert ZWSP in result
-    assert "~~削除~~" in result
+def _first_table(blocks: list[dict]) -> dict:
+    return next(block for block in blocks if block.get("type") == "table")
 
 
-def test_parse_markdown_table():
-    """Markdownテーブルのパーステスト"""
-    table_text = """
-| A | B |
+def test_normalize_adds_outer_pipes_and_separator() -> None:
+    raw = """学部 | 1時限 | 2時限 | 3時限
+---|---|---|---
+経済学部 | 英語 | 国語 | 地歴・公民・数学
+理工学部 | 英語 | 数学 | 理科
+"""
+
+    normalized = normalize_markdown_tables(raw)
+    lines = normalized.splitlines()
+
+    assert lines[0] == "|学部|1時限|2時限|3時限|"
+    assert lines[1] == "|---|---|---|---|"
+    assert lines[2].startswith("|経済学部")
+
+
+def test_normalize_without_separator_still_generates_separator() -> None:
+    raw = """学部 | 1時限 | 2時限
+経済学部 | 英語 | 国語
+理工学部 | 英語 | 数学
+"""
+
+    normalized = normalize_markdown_tables(raw)
+    lines = normalized.splitlines()
+
+    assert lines[0] == "|学部|1時限|2時限|"
+    assert lines[1] == "|---|---|---|"
+    assert lines[2] == "|経済学部|英語|国語|"
+
+
+def test_heading_inline_with_table_is_split() -> None:
+    raw = """### 見出しつきの表 学部 | 1時限 | 2時限
+経済学部 | 英語 | 国語
+"""
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+    markdown_blocks = [b for b in blocks if b.get("type") == "markdown"]
+    table_blocks = [b for b in blocks if b.get("type") == "table"]
+
+    assert markdown_blocks
+    assert table_blocks
+    headers = [
+        extract_plain_text_from_table_cell(cell) for cell in table_blocks[0]["rows"][0]
+    ]
+    assert headers == ["学部", "1時限", "2時限"]
+
+
+def test_empty_table_cell_is_filled_with_dash() -> None:
+    raw = """| Name | Status |
 |---|---|
-| 1 | 2 |
-| 3 | 4 |
+| Amy | |
 """
-    
-    rows = parse_markdown_table(table_text)
-    assert len(rows) == 3  # ヘッダー + 2行
-    assert rows[0] == ['A', 'B']
-    assert rows[1] == ['1', '2']
-    assert rows[2] == ['3', '4']
+
+    table = _first_table(convert_markdown_to_slack_blocks(raw))
+    row = table["rows"][1]
+    assert extract_plain_text_from_table_cell(row[1]) == "-"
 
 
-def test_parse_markdown_table_with_decoration():
-    """装飾付きテーブルのパーステスト"""
-    table_text = """
-| 項目 | 説明 |
-|------|------|
-| **太字** | これは**重要**です |
-| *斜体* | これは*参考*です |
-"""
-    
-    rows = parse_markdown_table(table_text)
-    assert len(rows) == 3
-    assert '**太字**' in rows[1][0]
-    assert '**重要**' in rows[1][1]
-
-
-def test_convert_markdown_to_slack_blocks_simple():
-    """シンプルなMarkdownの変換テスト"""
-    markdown = "これは**重要**です"
-    blocks = convert_markdown_to_slack_blocks(markdown)
-    
-    assert len(blocks) == 1
-    assert blocks[0]['type'] == 'markdown'
-    assert '**重要**' in blocks[0]['text']
-
-
-def test_convert_markdown_to_slack_blocks_with_table():
-    """テーブル付きMarkdownの変換テスト"""
-    markdown = """
-# タイトル
-
-| A | B |
-|---|---|
-| 1 | 2 |
-"""
-    
-    blocks = convert_markdown_to_slack_blocks(markdown)
-    
-    # markdownブロックとtableブロックが含まれる
-    assert len(blocks) >= 2
-    
-    # tableブロックが存在する
-    table_blocks = [b for b in blocks if b['type'] == 'table']
-    assert len(table_blocks) == 1
-    
-    # テーブルの内容を確認
-    table = table_blocks[0]
-    assert 'rows' in table
-    assert len(table['rows']) == 2  # ヘッダー + 1行
-
-
-def test_convert_markdown_to_slack_messages_multiple_tables():
-    """複数テーブルのメッセージ分割テスト"""
-    markdown = """
-# タイトル
+def test_multiple_tables_are_split_into_multiple_messages() -> None:
+    raw = """# Report
 
 | A | B |
 |---|---|
 | 1 | 2 |
 
-中間テキスト
+middle text
 
 | C | D |
 |---|---|
 | 3 | 4 |
 """
-    
-    messages = convert_markdown_to_slack_messages(markdown)
-    
-    # 複数のメッセージに分割される
+
+    messages = convert_markdown_to_slack_messages(raw)
     assert len(messages) >= 3
-    
-    # 各メッセージにtableブロックが1つ以下
-    for blocks in messages:
-        table_count = sum(1 for b in blocks if b['type'] == 'table')
-        assert table_count <= 1
+    for message_blocks in messages:
+        assert sum(1 for b in message_blocks if b.get("type") == "table") <= 1
 
 
-def test_empty_input():
-    """空の入力のテスト"""
-    blocks = convert_markdown_to_slack_blocks("")
-    assert len(blocks) == 0
+def test_zero_width_space_not_inserted_inside_code_fence() -> None:
+    text = "```\n**not bold**\n```\noutside **bold**"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert "\u200b**not bold**" not in converted
+    assert "**bold**\u200b" in converted
 
 
-def test_only_text():
-    """テーブルなしのテキストのみのテスト"""
-    markdown = "これはテキストのみです。\n\n**太字**もあります。"
-    blocks = convert_markdown_to_slack_blocks(markdown)
-    
-    # markdownブロックのみ
-    assert all(b['type'] == 'markdown' for b in blocks)
+def test_blocks_to_plain_text_and_fallback_generation() -> None:
+    raw = """# Title
+
+| Name | Score |
+|---|---|
+| Amy | 100 |
+"""
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+    plain = blocks_to_plain_text(blocks)
+    fallback = build_fallback_text_from_blocks(blocks)
+
+    assert "Title" in plain
+    assert "Name | Score" in plain
+    assert "Amy | 100" in fallback
 
 
-if __name__ == '__main__':
-    pytest.main([__file__, '-v'])
+def test_decode_html_entities() -> None:
+    assert decode_html_entities("A &gt; B &amp; C") == "A > B & C"
+
+
+def test_slack_link_in_table_cell_keeps_single_cell() -> None:
+    raw = """| Name | Link |
+|---|---|
+| Docs | <https://example.com|Example> |
+"""
+
+    table = _first_table(convert_markdown_to_slack_blocks(raw))
+    row = table["rows"][1]
+    assert len(row) == 2
+    assert extract_plain_text_from_table_cell(row[1]) == "<https://example.com|Example>"
