@@ -3,6 +3,7 @@
 Convert LLM-generated Markdown into Slack Block Kit messages (`markdown` + `table` blocks).
 
 日本語: LLMのMarkdown出力をSlack向けBlock Kit (`markdown` / `table`) に安全変換するPythonライブラリです。
+Japanese docs: [README.ja.md](README.ja.md)
 
 ## What / Why
 

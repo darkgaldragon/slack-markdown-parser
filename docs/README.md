@@ -1,6 +1,7 @@
 # Documentation Index
 
 Public documentation for `slack-markdown-parser`:
+Japanese index: [`README.ja.md`](README.ja.md)
 
 - [`spec.md`](spec.md): normative behavior and edge-case rules.
 - [`Markdown_Sample.md`](Markdown_Sample.md): markdown samples used for manual checks.
