@@ -38,5 +38,6 @@ python/
 # IDE / OS
 .vscode/
 .idea/
+.serena/
 .DS_Store
 Thumbs.db
