@@ -48,3 +48,16 @@ jobs:
           python -m pip install build
       - name: Build package
         run: python -m build
+
+  required-check:
+    name: test
+    if: ${{ always() }}
+    needs:
+      - test
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required jobs passed
+        run: |
+          test "${{ needs.test.result }}" = "success"
+          test "${{ needs.build.result }}" = "success"
