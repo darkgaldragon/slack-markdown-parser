@@ -108,9 +108,9 @@ QA | ~~保留~~ | Team C
 
 ![Slack BOT rendering example](docs/images/slack-bot-rendering-example.png)
 
-## 公開 API
+## ライブラリの公開インターフェース
 
-### メイン関数
+### メイン関数（公開関数）
 
 | 関数 | 説明 |
 |---|---|
@@ -119,7 +119,7 @@ QA | ~~保留~~ | Team C
 | `build_fallback_text_from_blocks(blocks) → str` | ブロックから `chat.postMessage.text` 用 fallback テキストを生成 |
 | `blocks_to_plain_text(blocks) → str` | ブロックからプレーンテキストを生成 |
 
-### ユーティリティ
+### ユーティリティ関数（公開関数）
 
 | 関数 | 説明 |
 |---|---|
