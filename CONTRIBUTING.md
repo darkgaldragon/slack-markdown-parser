@@ -27,7 +27,6 @@ python -m build
 ```
 
 If you are changing Markdown parsing behavior, please add or update automated tests in `tests/`.
-For exploratory checks, you can also use `tests/test_markdown_edge_cases.md` as a manual sample input.
 
 ## Pull requests
 
