@@ -148,6 +148,15 @@ These are also part of the public package surface:
   - Generating Slack `mrkdwn` strings
   - Supporting clients or MCP tools that can only send `mrkdwn`
 
+## Contributing
+
+Contributions, bug reports, and documentation improvements are welcome.
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
+
+## Changelog
+
+Version history is maintained in [CHANGELOG.md](CHANGELOG.md).
+
 ## Contact
 
 - GitHub Issues / Pull Requests

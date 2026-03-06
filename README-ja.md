@@ -135,6 +135,15 @@ QA | ~~保留~~ | Team C
   - `mrkdwn` 文字列の生成
   - `mrkdwn` のみ送信可能なクライアント／MCP ツール
 
+## コントリビュート
+
+不具合報告、ドキュメント改善、コードの提案を歓迎します。
+Issue / Pull Request を作成する前に [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。
+
+## 変更履歴
+
+リリース履歴は [CHANGELOG.md](CHANGELOG.md) で管理しています。
+
 ## 連絡先
 
 - GitHub Issue / Pull Request

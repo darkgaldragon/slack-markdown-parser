@@ -44,6 +44,9 @@ Issues = "https://github.com/darkgaldragon/slack-markdown-parser/issues"
 [tool.setuptools.packages.find]
 include = ["slack_markdown_parser*"]
 
+[tool.setuptools.package-data]
+slack_markdown_parser = ["py.typed"]
+
 [tool.black]
 line-length = 88
 target-version = ["py310"]
