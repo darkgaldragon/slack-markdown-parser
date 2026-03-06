@@ -1,122 +1,122 @@
-# パーサー挙動仕様
+# Parser Behavior Specification
 
-このドキュメントは `slack-markdown-parser` の変換挙動を定義します。
+This document defines the conversion behavior of `slack-markdown-parser`.
 
-## 入力
+## Input
 
-- UTF-8 の Markdown 文字列
-- 不正形テーブル、HTML エンティティ、プレーンテキスト混在を許容
+- A UTF-8 Markdown string
+- Malformed tables, HTML entities, and mixed plain text are accepted
 
-## 出力
+## Output
 
-- Slack Block Kit ブロック（`markdown` / `table`）
-- 複数テーブル入力時は「1メッセージ1テーブル」を満たすメッセージ群
+- Slack Block Kit blocks (`markdown` / `table`)
+- When the input contains multiple tables, a list of messages that satisfies the "one table per message" rule
 
-## 変換パイプライン
+## Conversion pipeline
 
-`convert_markdown_to_slack_blocks` の処理順序:
+Processing order in `convert_markdown_to_slack_blocks`:
 
-1. **HTML エンティティデコード** — `&gt;`, `&amp;` 等を元の文字に復元
-2. **テーブル正規化** — 後述のルールで不正形テーブルを補完
-3. **セグメント分割** — テーブル領域（`|...|` 行の連続）と非テーブル領域に分割
-4. **ブロック生成** — セグメント種別ごとに処理:
-   - テーブル領域 → セル装飾を解析し `table` ブロックを生成。変換に失敗した場合（テーブル候補行が2行未満、パース結果が空など）は `markdown` ブロックにフォールバック
-   - 非テーブル領域 → ZWSP を付与して `markdown` ブロックを生成
+1. HTML entity decode: restore entities such as `&gt;` and `&amp;`
+2. Table normalization: repair malformed table syntax according to the rules below
+3. Segment split: divide the text into table regions (consecutive lines containing `|`) and non-table regions
+4. Block generation:
+   - Table regions: parse inline cell styling and generate a `table` block. If conversion fails, such as when there are fewer than two candidate lines or the parse result is empty, fall back to a `markdown` block.
+   - Non-table regions: add ZWSP where needed and generate a `markdown` block
 
-`convert_markdown_to_slack_messages` は上記の結果を「1メッセージ1テーブル」制約に沿って分割します。
+`convert_markdown_to_slack_messages` then splits the resulting block list to satisfy the "one table per message" constraint.
 
-## テーブル正規化ルール
+## Table normalization rules
 
-LLM は外枠パイプの省略、セパレータ行の欠落、列数の不一致など多様なテーブル記法を生成します。これらをそのまま Slack `table` ブロックに渡すと `invalid_blocks` エラーになるため、`normalize_markdown_tables` で事前に補完します。
+LLMs often emit tables with omitted outer pipes, missing separator rows, or inconsistent column counts. Passing those directly to Slack `table` blocks can trigger `invalid_blocks`, so `normalize_markdown_tables` repairs them first.
 
-### テーブル候補の判定
+### Table candidate detection
 
-- 連続する `|` 含有行を候補としてバッファリング
-- 以下のいずれかで「テーブル」と判定:
-  - セパレータ行（`|---|---|` 形式）を含む
-  - 2行以上のデータ行があり、列数が一致または差が1以内で、最大列数が2以上
+- Buffer consecutive lines that contain `|`
+- Treat the buffered region as a table when either of the following is true:
+  - It contains a separator row such as `|---|---|`
+  - It has at least two data rows, the column counts match or differ by at most one, and the maximum column count is at least two
 
-### 正規化処理
+### Normalization behavior
 
-- 外枠パイプが欠けている行は `|...|` 形式に補完
-- セパレータ行が欠けていればヘッダ直後に自動生成
-- 各行の列数はヘッダ幅に合わせて不足分を空セルで補完、超過分を切り詰め
-- 空セルは `table` ブロック生成時に `-` に置換
-- `# 見出し |a|b|` 形式は見出し行とテーブル行に分離（見出し内のインラインコードに含まれるパイプは無視）
+- Add missing outer pipes so lines become `|...|`
+- If the separator row is missing, generate one immediately after the header row
+- Match each row to the header width by filling missing cells with empty cells and truncating extra cells
+- Replace empty cells with `-` when generating the Slack `table` block
+- Split `# Heading |a|b|`-style lines into a heading line and a table row. Pipes inside inline code in the heading are ignored for this detection.
 
-### セル内パイプの保持
+### Preserving literal pipes inside cells
 
-- Slack リンク `<url|text>` 内のパイプはセル区切りとして扱わない
-- インラインコード `` `...` `` 内のパイプもセル区切りとして扱わない
-- エスケープされたパイプ `\|` はセル区切りとして扱わず、表示時にバックスラッシュを除去して `|` として出力
+- Treat pipes inside Slack links such as `<url|text>` as literal content, not as cell separators
+- Treat pipes inside inline code `` `...` `` as literal content, not as cell separators
+- Treat escaped pipes `\|` as literal content and remove the backslash in the final displayed text
 
-## テーブルセル装飾
+## Table cell styling
 
-セル内で次のインライン装飾を認識し、Slack `rich_text` 要素のスタイルに変換:
+Inside table cells, the following inline styles are recognized and converted into Slack `rich_text` styling:
 
-| 記法 | スタイル |
+| Syntax | Style |
 |---|---|
 | `**text**` | bold |
 | `*text*` | italic |
 | `~~text~~` | strike |
 | `` `text` `` | code |
 
-複数装飾のネストはプレーンテキストとして保持します。
+Nested combinations of these styles are preserved as plain text.
 
-## ZWSP（ゼロ幅スペース）付与ルール
+## ZWSP insertion rules
 
-`add_zero_width_spaces_to_markdown` の挙動:
+Behavior of `add_zero_width_spaces_to_markdown`:
 
-### 目的
+### Purpose
 
-日本語等の語間スペースがない文で装飾記号が隣接文字と結合し、Slack のレンダリングが崩れる問題を回避します。通常の半角スペースではなくゼロ幅スペースを使うことで、見た目上の不自然な空白を生じさせずに Slack の装飾解析を補助します。
+In languages such as Japanese that do not use spaces between words, formatting markers can attach directly to surrounding characters and break Slack rendering. This library inserts zero-width spaces instead of visible spaces so Slack gets clearer formatting boundaries without changing the visible layout.
 
-### 対象パターン
+### Target patterns
 
-以下の装飾記号について、前後のどちらか一方でも隣接文字がスペース・タブ・改行・ZWSP でない場合、または行頭・行末に接している場合、装飾トークン全体を ZWSP（U+200B）で囲って Slack に独立した境界として認識させる:
+For each formatting token below, if either adjacent side is not a space, tab, newline, or existing ZWSP, or if the token touches the start or end of a line, the whole token is wrapped in ZWSP (`U+200B`) so Slack recognizes it as a standalone formatting boundary:
 
-- `` `code` `` — インラインコード
-- `**bold**` — 太字
-- `*italic*` — 斜体
-- `~~strike~~` — 取消線
+- `` `code` ``: inline code
+- `**bold**`: bold
+- `*italic*`: italic
+- `~~strike~~`: strikethrough
 
-### 除外範囲
+### Excluded regions
 
-- **フェンスドコードブロック**（`` ``` ... ``` ``）内は一切変更しない
-- インラインコード（`` `...` ``）は除外**しない**（付与対象）
+- Fenced code blocks (`` ``` ... ``` ``) are never modified
+- Inline code (`` `...` ``) is not excluded; it is part of the target set above
 
-## ZWSP 除去ルール
+## ZWSP removal rules
 
-`strip_zero_width_spaces` はテーブルセル生成時および fallback テキスト生成時に呼ばれ、本ライブラリが挿入した制御文字を除去します。
+`strip_zero_width_spaces` is called when generating table cells and fallback text so that control characters inserted by this library do not leak into plain output.
 
-### 除去対象
+### Removed characters
 
-| コードポイント | 名称 | 除去理由 |
+| Code point | Name | Reason |
 |---|---|---|
-| U+200B | ZWSP（ゼロ幅スペース） | 本ライブラリが装飾安定化のために挿入したもの |
-| U+FEFF | BOM（バイト順マーク） | エンコーディング由来の不要な制御文字 |
+| `U+200B` | ZWSP (zero-width space) | Inserted by this library for formatting stability |
+| `U+FEFF` | BOM (byte order mark) | Unwanted encoding artifact |
 
-### 除去しない文字
+### Preserved characters
 
-| コードポイント | 名称 | 保持理由 |
+| Code point | Name | Reason |
 |---|---|---|
-| U+200C | ZWNJ（ゼロ幅非接合子） | ペルシャ語・ヒンディー語等の語形制御に使用 |
-| U+200D | ZWJ（ゼロ幅接合子） | 結合絵文字（👨‍💻 = 👨+ZWJ+💻）の接着剤として使用。除去すると絵文字が分解される |
+| `U+200C` | ZWNJ (zero-width non-joiner) | Used for word-shape control in languages such as Persian and Hindi |
+| `U+200D` | ZWJ (zero-width joiner) | Required for joined emoji and other grapheme composition |
 
-## fallback テキスト
+## Fallback text
 
-`build_fallback_text_from_blocks` は `chat.postMessage.text` に設定する通知プレビュー用テキストを生成:
+`build_fallback_text_from_blocks` generates preview text for `chat.postMessage.text` as follows:
 
-- `markdown` ブロック → ZWSP を除去したテキスト
-- `table` ブロック → 各行のセルテキストを ` | ` で連結
-- 各ブロックの出力を空行で区切って結合
+- `markdown` blocks: text with ZWSP removed
+- `table` blocks: join each row's cell text with ` | `
+- Join block outputs with blank lines between them
 
-## 決定性
+## Determinism
 
-同一入力に対して、環境差分に依存せず常に同一の出力を返します。
+For the same input, the library always returns the same output regardless of environment.
 
-## 非ゴール
+## Non-goals
 
-- `mrkdwn` 文字列の生成
-- 完全な Markdown AST の再現
-- HTML レンダリング互換
+- Generating Slack `mrkdwn` strings
+- Reconstructing a full Markdown AST
+- Matching HTML rendering behavior
