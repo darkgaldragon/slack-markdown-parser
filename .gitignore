@@ -11,8 +11,7 @@ dist/
 *.egg
 pip-wheel-metadata/
 
-# Local test outputs
-tests/
+# Test outputs
 .pytest_cache/
 .coverage
 .coverage.*
