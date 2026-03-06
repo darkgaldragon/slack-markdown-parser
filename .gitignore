@@ -38,5 +38,7 @@ python/
 .vscode/
 .idea/
 .serena/
+AGENTS.md
+CLAUDE.md
 .DS_Store
 Thumbs.db
