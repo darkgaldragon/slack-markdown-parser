@@ -8,9 +8,11 @@ from slack_markdown_parser import (
     build_fallback_text_from_blocks,
     convert_markdown_to_slack_blocks,
     convert_markdown_to_slack_messages,
+    convert_markdown_to_slack_payloads,
     decode_html_entities,
     extract_plain_text_from_table_cell,
     normalize_markdown_tables,
+    sanitize_slack_text,
 )
 
 
@@ -127,7 +129,10 @@ def test_bold_with_tight_boundary_on_left_is_wrapped_on_both_sides() -> None:
     text = "特に伸びが大きいのは、**実務系** と **ツール連携** ね。"
     converted = add_zero_width_spaces_to_markdown(text)
 
-    assert "特に伸びが大きいのは、\u200b**実務系**\u200b と **ツール連携** ね。" == converted
+    assert (
+        "特に伸びが大きいのは、\u200b**実務系**\u200b と **ツール連携** ね。"
+        == converted
+    )
 
 
 def test_blocks_to_plain_text_and_fallback_generation() -> None:
@@ -151,6 +156,32 @@ def test_decode_html_entities() -> None:
     assert decode_html_entities("A &gt; B &amp; C") == "A > B & C"
 
 
+def test_sanitize_invalid_slack_angle_token() -> None:
+    assert sanitize_slack_text("A <foo> B") == "A ＜foo＞ B"
+
+
+def test_sanitize_keeps_valid_slack_angle_link() -> None:
+    assert (
+        sanitize_slack_text("Docs: <https://example.com|Example>")
+        == "Docs: <https://example.com|Example>"
+    )
+
+
+def test_sanitize_removes_ansi_and_control_chars() -> None:
+    raw = "ok\x1b[31m red\x1b[0m\x07 done"
+    assert sanitize_slack_text(raw) == "ok red done"
+
+
+def test_convert_blocks_applies_slack_sanitization() -> None:
+    blocks = convert_markdown_to_slack_blocks("Status <draft>\x1b[31m")
+    assert blocks[0]["text"] == "Status ＜draft＞"
+
+
+def test_convert_blocks_neutralizes_html_like_tags() -> None:
+    blocks = convert_markdown_to_slack_blocks("Plain <div>html</div> text")
+    assert blocks[0]["text"] == "Plain ＜div＞html＜/div＞ text"
+
+
 def test_slack_link_in_table_cell_keeps_single_cell() -> None:
     raw = """| Name | Link |
 |---|---|
@@ -160,7 +191,45 @@ def test_slack_link_in_table_cell_keeps_single_cell() -> None:
     table = _first_table(convert_markdown_to_slack_blocks(raw))
     row = table["rows"][1]
     assert len(row) == 2
-    assert extract_plain_text_from_table_cell(row[1]) == "<https://example.com|Example>"
+    assert extract_plain_text_from_table_cell(row[1]) == "Example"
+
+
+def test_markdown_link_in_table_cell_uses_link_label_for_plain_text() -> None:
+    raw = """| Name | Link |
+|---|---|
+| Docs | [Example](https://example.com) |
+"""
+
+    table = _first_table(convert_markdown_to_slack_blocks(raw))
+    row = table["rows"][1]
+    assert extract_plain_text_from_table_cell(row[1]) == "Example"
+
+
+def test_table_cell_preserves_link_and_neutralizes_html_like_tags() -> None:
+    raw = """| Name | Link |
+|---|---|
+| Docs | [Example](https://example.com) and <b>tag</b> |
+"""
+
+    table = _first_table(convert_markdown_to_slack_blocks(raw))
+    row = table["rows"][1]
+    assert extract_plain_text_from_table_cell(row[1]) == "Example and ＜b＞tag＜/b＞"
+
+
+def test_convert_payloads_includes_blocks_and_fallback_text() -> None:
+    raw = """# Report
+
+| Team | Status |
+|---|---|
+| Amy | **OK** |
+"""
+
+    payloads = convert_markdown_to_slack_payloads(raw)
+    assert len(payloads) == 2
+    assert payloads[0]["blocks"][0]["type"] == "markdown"
+    assert "Report" in payloads[0]["text"]
+    assert payloads[1]["blocks"][0]["type"] == "table"
+    assert "Team | Status" in payloads[1]["text"]
 
 
 def test_zwj_preserved_in_table_cell() -> None:

@@ -17,13 +17,25 @@ This document defines the conversion behavior of `slack-markdown-parser`.
 Processing order in `convert_markdown_to_slack_blocks`:
 
 1. HTML entity decode: restore entities such as `&gt;` and `&amp;`
-2. Table normalization: repair malformed table syntax according to the rules below
-3. Segment split: divide the text into table regions (consecutive lines containing `|`) and non-table regions
-4. Block generation:
+2. Slack text sanitize: remove ANSI/control noise and neutralize invalid Slack angle-bracket tokens
+3. Table normalization: repair malformed table syntax according to the rules below
+4. Segment split: divide the text into table regions (consecutive lines containing `|`) and non-table regions
+5. Block generation:
    - Table regions: parse inline cell styling and generate a `table` block. If conversion fails, such as when there are fewer than two candidate lines or the parse result is empty, fall back to a `markdown` block.
    - Non-table regions: add ZWSP where needed and generate a `markdown` block
 
 `convert_markdown_to_slack_messages` then splits the resulting block list to satisfy the "one table per message" constraint.
+`convert_markdown_to_slack_payloads` returns the same split blocks plus fallback `text` values ready for `chat.postMessage`.
+
+## Slack text sanitize rules
+
+Behavior of `sanitize_slack_text`:
+
+- Remove ANSI escape sequences
+- Remove general control characters except line breaks and tabs already preserved by the regex
+- Keep valid Slack angle-bracket tokens such as links, mentions, channels, special mentions, subteam mentions, and `<!date^...>`
+- Replace unsupported angle-bracket tokens such as `<foo>` with full-width brackets (`＜foo＞`) so Slack does not interpret them as malformed special syntax
+- This includes raw HTML-like tags such as `<div>` or `<span>`, which are neutralized instead of being passed through as Slack special syntax
 
 ## Table normalization rules
 
@@ -62,6 +74,14 @@ Inside table cells, the following inline styles are recognized and converted int
 | `` `text` `` | code |
 
 Nested combinations of these styles are preserved as plain text.
+
+The following link syntaxes are also recognized inside table cells:
+
+| Syntax | Output |
+|---|---|
+| `[label](https://example.com)` | Slack rich-text link |
+| `<https://example.com|label>` | Slack rich-text link |
+| `<https://example.com>` | Slack rich-text link |
 
 ## ZWSP insertion rules
 
@@ -110,6 +130,8 @@ For each formatting token below, if either adjacent side is not a space, tab, ne
 - `markdown` blocks: text with ZWSP removed
 - `table` blocks: join each row's cell text with ` | `
 - Join block outputs with blank lines between them
+
+For table-cell links, fallback text uses the link label if present, otherwise the URL.
 
 ## Determinism
 

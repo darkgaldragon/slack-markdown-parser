@@ -26,8 +26,11 @@ This library leans on Slack Block Kit's `markdown` block for standard Markdown a
 - Convert Markdown tables into Slack `table` blocks
 - Repair common LLM table issues such as missing outer pipes, missing separator rows, mismatched column counts, and empty cells
 - Split output into multiple Slack messages when needed to satisfy Slack's "one table per message" constraint
+- Sanitize ANSI/control characters and neutralize invalid Slack angle-bracket tokens before block generation
 - Add ZWSP around inline formatting tokens to reduce rendering issues outside fenced code blocks
+- Support Markdown and Slack-style links inside table cells
 - Build fallback text for `chat.postMessage.text` from generated blocks
+- Accept raw LLM Markdown without tightly constraining the model prompt, using best-effort sanitize and table repair before Slack delivery
 
 ## Requirements
 
@@ -44,8 +47,7 @@ pip install slack-markdown-parser
 
 ```python
 from slack_markdown_parser import (
-    build_fallback_text_from_blocks,
-    convert_markdown_to_slack_messages,
+    convert_markdown_to_slack_payloads,
 )
 
 markdown = """
@@ -57,11 +59,7 @@ markdown = """
 | UI | *In progress* |
 """
 
-for blocks in convert_markdown_to_slack_messages(markdown):
-    payload = {
-        "blocks": blocks,
-        "text": build_fallback_text_from_blocks(blocks) or "report",
-    }
+for payload in convert_markdown_to_slack_payloads(markdown):
     print(payload)
 ```
 
@@ -115,6 +113,7 @@ Example Slack bot rendering (`markdown` + `table` blocks):
 | Function | Description |
 |---|---|
 | `convert_markdown_to_slack_messages(markdown_text) -> list[list[dict]]` | Convert Markdown into Slack messages already split around table blocks. |
+| `convert_markdown_to_slack_payloads(markdown_text) -> list[dict]` | Convert Markdown into Slack-ready payloads with both `blocks` and fallback `text`. |
 | `convert_markdown_to_slack_blocks(markdown_text) -> list[dict]` | Convert Markdown into a flat Block Kit block list. |
 | `build_fallback_text_from_blocks(blocks) -> str` | Build fallback text suitable for `chat.postMessage.text`. |
 | `blocks_to_plain_text(blocks) -> str` | Convert blocks into plain text. |
@@ -126,6 +125,7 @@ Example Slack bot rendering (`markdown` + `table` blocks):
 | `normalize_markdown_tables(markdown_text) -> str` | Normalize Markdown table syntax before conversion. |
 | `add_zero_width_spaces_to_markdown(text) -> str` | Insert ZWSP around formatting tokens where Slack needs stronger boundaries. |
 | `decode_html_entities(text) -> str` | Decode HTML entities before parsing. |
+| `sanitize_slack_text(text) -> str` | Remove ANSI/control noise and neutralize invalid Slack angle-bracket tokens. |
 | `strip_zero_width_spaces(text) -> str` | Remove ZWSP (`U+200B`) and BOM (`U+FEFF`) while preserving join-control characters such as ZWJ. |
 
 ### Lower-level exported helpers
