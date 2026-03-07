@@ -26,8 +26,11 @@ Slack Block Kit の `markdown` ブロック（標準 Markdown 構文をそのま
 - Markdown テーブルを `table` ブロックに変換（セル内の太字・斜体・取消線・インラインコードを認識）
 - LLM が生成する多様な Markdown テーブルで起こり得る記法の揺れ（外枠パイプ不足、セパレータ行不足、列数不一致、空セル）を検知し自動補完。Slack `table` ブロックの `invalid_blocks` エラーを未然に回避
 - テーブルごとにメッセージを自動分割（Slack の「1メッセージ1テーブル」制約に対応）
+- ANSI escape / 制御文字を除去し、不正な Slack 角括弧トークンを自動で無害化
 - 装飾記号の前後に ZWSP を付与して表示崩れを抑制（フェンスドコードブロック内は除外、インラインコードは付与対象）
+- テーブルセル内の Markdown link / Slack link を認識
 - `chat.postMessage.text` 用の fallback テキストを生成（ブロック内容をプレーンテキスト化して通知プレビュー等に利用）
+- モデル側で Markdown を厳密に制御しなくてもよいよう、Slack 送信前にベストエフォートでサニタイズとテーブル補完を行う
 
 ## 利用前提
 
@@ -44,8 +47,7 @@ pip install slack-markdown-parser
 
 ```python
 from slack_markdown_parser import (
-    convert_markdown_to_slack_messages,
-    build_fallback_text_from_blocks,
+    convert_markdown_to_slack_payloads,
 )
 
 markdown = """
@@ -57,11 +59,7 @@ markdown = """
 | UI | *In progress* |
 """
 
-for blocks in convert_markdown_to_slack_messages(markdown):
-    payload = {
-        "blocks": blocks,
-        "text": build_fallback_text_from_blocks(blocks) or "report",
-    }
+for payload in convert_markdown_to_slack_payloads(markdown):
     print(payload)
 ```
 
@@ -115,6 +113,7 @@ QA | ~~保留~~ | Team C
 | 関数 | 説明 |
 |---|---|
 | `convert_markdown_to_slack_messages(markdown_text) → list[list[dict]]` | Markdown をテーブル分割済みのメッセージ群に変換（主要エントリポイント） |
+| `convert_markdown_to_slack_payloads(markdown_text) → list[dict]` | `blocks` と fallback `text` を含む Slack 送信用 payload 群へ変換 |
 | `convert_markdown_to_slack_blocks(markdown_text) → list[dict]` | Markdown を Block Kit ブロックのリストに変換 |
 | `build_fallback_text_from_blocks(blocks) → str` | ブロックから `chat.postMessage.text` 用 fallback テキストを生成 |
 | `blocks_to_plain_text(blocks) → str` | ブロックからプレーンテキストを生成 |
@@ -126,6 +125,7 @@ QA | ~~保留~~ | Team C
 | `normalize_markdown_tables(markdown_text) → str` | テーブル記法を正規化（パイプ補完、セパレータ生成、列数調整） |
 | `add_zero_width_spaces_to_markdown(text) → str` | 装飾記号の前後に ZWSP を挿入（フェンスドコードブロック内は除外） |
 | `decode_html_entities(text) → str` | HTML エンティティをデコード |
+| `sanitize_slack_text(text) → str` | ANSI / 制御文字を除去し、不正な Slack 角括弧トークンを無害化 |
 | `strip_zero_width_spaces(text) → str` | ZWSP (U+200B) と BOM (U+FEFF) を除去（ZWJ 等の結合制御文字は保持） |
 
 ## 仕様

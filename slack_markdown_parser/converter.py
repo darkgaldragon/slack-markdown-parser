@@ -12,12 +12,44 @@ from typing import Any, Dict, List, Optional
 
 ZWSP = "\u200b"
 
+ANSI_ESCAPE_PATTERN = re.compile(
+    r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x1B\x07]*(?:\x07|\x1B\\))"
+)
+CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]")
+SLACK_ANGLE_TOKEN_PATTERN = re.compile(r"<[^>\n]+>")
+PROTECTED_UNDERSCORE_SPAN_PATTERN = re.compile(
+    r"```.*?```"
+    r"|``.*?``"
+    r"|`[^`\n]+`"
+    r"|\[[^\]\n]+\]\([^)]+\)"
+    r"|<[^>\n]+>"
+    r"|https?://[^\s<]+",
+    re.DOTALL,
+)
+UNDERSCORE_BOLD_PATTERN = re.compile(
+    r"(?<![\\0-9A-Za-z_])__(?!_)(?=\S)([^\n]*?\S)__(?![0-9A-Za-z_])"
+)
+UNDERSCORE_ITALIC_PATTERN = re.compile(
+    r"(?<![\\0-9A-Za-z_])_(?!_)(?=\S)([^\n]*?\S)_(?![0-9A-Za-z_])"
+)
+
 TABLE_SEPARATOR_PATTERN = re.compile(r"^\s*\|[\s\-:|]+\|\s*$")
 LOOSE_TABLE_SEPARATOR_PATTERN = re.compile(
     r"^\s*\|?\s*:?-{3,}\s*(\|\s*:?-{3,}\s*)+\|?\s*$"
 )
-INLINE_CELL_PATTERN = re.compile(
-    r"(`[^`]+`|~~[^~]+~~|\*\*[^*]+\*\*|(?<!\*)\*[^*]+\*(?!\*))"
+TABLE_TOKEN_PATTERN = re.compile(
+    r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)"
+    r"|<(https?://[^>\s|]+)(?:\|([^>\n]+))?>"
+    r"|(`[^`]+`|~~[^~]+~~|\*\*[^*]+\*\*|(?<!\*)\*[^*]+\*(?!\*))"
+)
+ALLOWED_SLACK_ANGLE_TOKEN_PATTERNS = (
+    re.compile(r"^<https?://[^>\s|]+(?:\|[^>\n]+)?>$"),
+    re.compile(r"^<mailto:[^>\s|]+(?:\|[^>\n]+)?>$"),
+    re.compile(r"^<@[UW][A-Z0-9]+(?:\|[^>\n]+)?>$"),
+    re.compile(r"^<#[CG][A-Z0-9]+(?:\|[^>\n]+)?>$"),
+    re.compile(r"^<!(?:here|channel|everyone)>$"),
+    re.compile(r"^<!subteam\^[A-Z0-9]+(?:\|[^>\n]+)?>$"),
+    re.compile(r"^<!date\^[^>\n]+>$"),
 )
 
 
@@ -31,6 +63,60 @@ def decode_html_entities(text: str) -> str:
 def strip_zero_width_spaces(text: str) -> str:
     """Strip zero-width spaces from text."""
     return re.sub(r"[\u200B\uFEFF]", "", text or "")
+
+
+def _is_allowed_slack_angle_token(token: str) -> bool:
+    return any(pattern.match(token) for pattern in ALLOWED_SLACK_ANGLE_TOKEN_PATTERNS)
+
+
+def sanitize_slack_text(text: str) -> str:
+    """Remove control noise and neutralize invalid Slack angle tokens."""
+    if not text:
+        return text
+
+    cleaned = ANSI_ESCAPE_PATTERN.sub("", text)
+    cleaned = CONTROL_CHAR_PATTERN.sub("", cleaned)
+
+    def replace_invalid_token(match: re.Match[str]) -> str:
+        token = match.group(0)
+        if _is_allowed_slack_angle_token(token):
+            return token
+        return f"＜{token[1:-1]}＞"
+
+    return SLACK_ANGLE_TOKEN_PATTERN.sub(replace_invalid_token, cleaned)
+
+
+def normalize_underscore_emphasis(text: str) -> str:
+    """Canonicalize underscore emphasis into asterisk emphasis for Slack.
+
+    Slack `markdown` blocks reliably style `*...*` / `**...**`, but not
+    `_..._` / `__...__`. This keeps identifier-like snake_case text intact by
+    only converting markers that are not attached to ASCII word characters.
+    Protected spans such as code, links, angle-bracket tokens, and bare URLs
+    are left untouched.
+    """
+    if not text:
+        return text
+
+    def normalize_plain_segment(segment: str) -> str:
+        segment = UNDERSCORE_BOLD_PATTERN.sub(r"**\1**", segment)
+        segment = UNDERSCORE_ITALIC_PATTERN.sub(r"*\1*", segment)
+        return segment
+
+    normalized_parts: List[str] = []
+    last_index = 0
+    for match in PROTECTED_UNDERSCORE_SPAN_PATTERN.finditer(text):
+        if match.start() > last_index:
+            normalized_parts.append(
+                normalize_plain_segment(text[last_index : match.start()])
+            )
+        normalized_parts.append(match.group(0))
+        last_index = match.end()
+
+    if last_index < len(text):
+        normalized_parts.append(normalize_plain_segment(text[last_index:]))
+
+    return "".join(normalized_parts)
 
 
 def add_zero_width_spaces_to_markdown(text: str) -> str:
@@ -299,32 +385,42 @@ def _create_table_cell(text: str) -> Dict[str, Any]:
     elements: List[Dict[str, Any]] = []
     last_index = 0
 
-    for match in INLINE_CELL_PATTERN.finditer(clean_text):
+    for match in TABLE_TOKEN_PATTERN.finditer(clean_text):
         if match.start() > last_index:
             prefix = clean_text[last_index : match.start()]
             if prefix:
                 elements.append({"type": "text", "text": prefix})
 
-        token = match.group(0)
-        style: Dict[str, bool] = {}
-        content = token
+        markdown_label, markdown_url, angle_url, angle_label, token = match.groups()
+        element: Dict[str, Any]
+        if markdown_label and markdown_url:
+            element = {"type": "link", "url": markdown_url, "text": markdown_label}
+        elif angle_url:
+            element = {
+                "type": "link",
+                "url": angle_url,
+                "text": angle_label or angle_url,
+            }
+        else:
+            style: Dict[str, bool] = {}
+            content = token or ""
 
-        if token.startswith("`") and token.endswith("`"):
-            content = token[1:-1]
-            style["code"] = True
-        elif token.startswith("~~") and token.endswith("~~"):
-            content = token[2:-2]
-            style["strike"] = True
-        elif token.startswith("**") and token.endswith("**"):
-            content = token[2:-2]
-            style["bold"] = True
-        elif token.startswith("*") and token.endswith("*"):
-            content = token[1:-1]
-            style["italic"] = True
+            if content.startswith("`") and content.endswith("`"):
+                content = content[1:-1]
+                style["code"] = True
+            elif content.startswith("~~") and content.endswith("~~"):
+                content = content[2:-2]
+                style["strike"] = True
+            elif content.startswith("**") and content.endswith("**"):
+                content = content[2:-2]
+                style["bold"] = True
+            elif content.startswith("*") and content.endswith("*"):
+                content = content[1:-1]
+                style["italic"] = True
 
-        element: Dict[str, Any] = {"type": "text", "text": content}
-        if style:
-            element["style"] = style
+            element = {"type": "text", "text": content}
+            if style:
+                element["style"] = style
         elements.append(element)
         last_index = match.end()
 
@@ -354,7 +450,10 @@ def extract_plain_text_from_table_cell(cell: Dict[str, Any]) -> str:
             if element.get("type") == "rich_text_section":
                 for child in element.get("elements", []):
                     if isinstance(child, dict):
-                        texts.append(child.get("text", ""))
+                        if child.get("type") == "link":
+                            texts.append(str(child.get("text") or child.get("url", "")))
+                        else:
+                            texts.append(child.get("text", ""))
             elif "text" in element:
                 texts.append(str(element.get("text", "")))
         return "".join(texts)
@@ -447,6 +546,8 @@ def convert_markdown_to_slack_blocks(markdown_text: str) -> List[Dict[str, Any]]
         return []
 
     markdown_text = decode_html_entities(markdown_text)
+    markdown_text = sanitize_slack_text(markdown_text)
+    markdown_text = normalize_underscore_emphasis(markdown_text)
     markdown_text = normalize_markdown_tables(markdown_text)
     blocks: List[Dict[str, Any]] = []
 
@@ -500,6 +601,19 @@ def convert_markdown_to_slack_messages(
     if not blocks:
         return []
     return split_blocks_by_table(blocks)
+
+
+def convert_markdown_to_slack_payloads(
+    markdown_text: str,
+) -> List[Dict[str, Any]]:
+    """Convert markdown text into Slack-ready payload dicts with fallback text."""
+    payloads: List[Dict[str, Any]] = []
+    for blocks in convert_markdown_to_slack_messages(markdown_text):
+        fallback_text = build_fallback_text_from_blocks(blocks).strip()
+        if not fallback_text:
+            fallback_text = blocks_to_plain_text(blocks).strip()
+        payloads.append({"blocks": blocks, "text": fallback_text or " "})
+    return payloads
 
 
 def blocks_to_plain_text(blocks: List[Dict[str, Any]]) -> str:

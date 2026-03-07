@@ -17,13 +17,36 @@ This document defines the conversion behavior of `slack-markdown-parser`.
 Processing order in `convert_markdown_to_slack_blocks`:
 
 1. HTML entity decode: restore entities such as `&gt;` and `&amp;`
-2. Table normalization: repair malformed table syntax according to the rules below
-3. Segment split: divide the text into table regions (consecutive lines containing `|`) and non-table regions
-4. Block generation:
+2. Slack text sanitize: remove ANSI/control noise and neutralize invalid Slack angle-bracket tokens
+3. Underscore emphasis normalization: canonicalize `_..._` / `__...__` into `*...*` / `**...**` where Slack needs compatibility, while preserving snake_case-like identifiers and protected spans such as code, links, angle tokens, and bare URLs
+4. Table normalization: repair malformed table syntax according to the rules below
+5. Segment split: divide the text into table regions (consecutive lines containing `|`) and non-table regions
+6. Block generation:
    - Table regions: parse inline cell styling and generate a `table` block. If conversion fails, such as when there are fewer than two candidate lines or the parse result is empty, fall back to a `markdown` block.
    - Non-table regions: add ZWSP where needed and generate a `markdown` block
 
 `convert_markdown_to_slack_messages` then splits the resulting block list to satisfy the "one table per message" constraint.
+`convert_markdown_to_slack_payloads` returns the same split blocks plus fallback `text` values ready for `chat.postMessage`.
+
+## Slack text sanitize rules
+
+Behavior of `sanitize_slack_text`:
+
+- Remove ANSI escape sequences
+- Remove general control characters except line breaks and tabs already preserved by the regex
+- Keep valid Slack angle-bracket tokens such as links, mentions, channels, special mentions, subteam mentions, and `<!date^...>`
+- Replace unsupported angle-bracket tokens such as `<foo>` with full-width brackets (`＜foo＞`) so Slack does not interpret them as malformed special syntax
+- This includes raw HTML-like tags such as `<div>` or `<span>`, which are neutralized instead of being passed through as Slack special syntax
+
+## Underscore emphasis normalization rules
+
+Behavior of underscore emphasis normalization:
+
+- Convert `__text__` to `**text**` when the underscores behave like emphasis markers
+- Convert `_text_` to `*text*` when the underscores behave like emphasis markers
+- Do not convert underscore runs that are attached to ASCII word characters, so identifiers such as `foo_bar_baz` stay unchanged
+- Do not convert escaped forms such as `\_not italic\_`
+- Do not convert inside protected spans: fenced code, inline code, Markdown links, angle-bracket tokens, and bare URLs
 
 ## Table normalization rules
 
@@ -56,12 +79,22 @@ Inside table cells, the following inline styles are recognized and converted int
 
 | Syntax | Style |
 |---|---|
+| `__text__` | normalized to bold |
 | `**text**` | bold |
+| `_text_` | normalized to italic |
 | `*text*` | italic |
 | `~~text~~` | strike |
 | `` `text` `` | code |
 
 Nested combinations of these styles are preserved as plain text.
+
+The following link syntaxes are also recognized inside table cells:
+
+| Syntax | Output |
+|---|---|
+| `[label](https://example.com)` | Slack rich-text link |
+| `<https://example.com|label>` | Slack rich-text link |
+| `<https://example.com>` | Slack rich-text link |
 
 ## ZWSP insertion rules
 
@@ -110,6 +143,8 @@ For each formatting token below, if either adjacent side is not a space, tab, ne
 - `markdown` blocks: text with ZWSP removed
 - `table` blocks: join each row's cell text with ` | `
 - Join block outputs with blank lines between them
+
+For table-cell links, fallback text uses the link label if present, otherwise the URL.
 
 ## Determinism
 
