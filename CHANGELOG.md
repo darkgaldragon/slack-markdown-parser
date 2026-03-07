@@ -15,6 +15,7 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 - CI now runs the test suite on Python 3.10, 3.11, 3.12, and 3.13.
 - `.gitignore` no longer ignores the entire `tests/` directory, so new tests and sample fixtures can be tracked.
+- Refreshed the README and behavior spec to distinguish Slack renderer limitations from parser-owned normalization and repair behavior.
 
 ## [2.2.1] - 2026-03-07
 

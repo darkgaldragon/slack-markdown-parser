@@ -12,6 +12,13 @@ This document defines the conversion behavior of `slack-markdown-parser`.
 - Slack Block Kit blocks (`markdown` / `table`)
 - When the input contains multiple tables, a list of messages that satisfies the "one table per message" rule
 
+## Design target
+
+This parser does not try to reproduce full CommonMark, HTML, or rich-document rendering.
+Its goal is to produce Slack messages that read naturally when delivered through Slack Block Kit `markdown` and `table` blocks.
+
+When Markdown fidelity and Slack readability conflict, readable Slack output takes priority.
+
 ## Conversion pipeline
 
 Processing order in `convert_markdown_to_slack_blocks`:
@@ -27,6 +34,34 @@ Processing order in `convert_markdown_to_slack_blocks`:
 
 `convert_markdown_to_slack_messages` then splits the resulting block list to satisfy the "one table per message" constraint.
 `convert_markdown_to_slack_payloads` returns the same split blocks plus fallback `text` values ready for `chat.postMessage`.
+
+## Observed Slack renderer behavior
+
+The following behaviors are based on practical validation against real Slack clients using the generated Block Kit payloads.
+
+### Behaviors that Slack currently renders well
+
+- Asterisk emphasis: `*italic*`, `**bold**`
+- Strikethrough: `~~strike~~`
+- Inline code and fenced code blocks
+- Bare URLs, autolinks, Markdown links, reference-style links, and mailto links
+- Bullet lists, ordered lists, task lists, and simple one-level blockquotes
+- Slack `table` blocks
+
+### Behaviors limited by Slack itself
+
+- ATX headings (`#`, `##`, `###`) and setext headings render as plain text rather than true heading levels
+- Nested blockquotes are weaker than in full Markdown renderers
+- Horizontal rules render more like visible line text than semantic separators
+- Markdown image syntax does not become an embedded image inside `markdown` blocks
+- Math, raw HTML, HTML comments, `<details>`, admonition syntax, and Mermaid do not receive special rich rendering
+
+### Behaviors this parser compensates for
+
+- `_..._` and `__...__` are normalized into Slack-friendly `*...*` and `**...**`
+- Malformed Markdown tables are repaired before `table` block generation
+- Table-like rows inside fenced code blocks are kept out of table parsing
+- Unsupported Slack angle-bracket tokens such as `<foo>` or raw HTML-like tags are neutralized
 
 ## Slack text sanitize rules
 
@@ -157,3 +192,4 @@ For the same input, the library always returns the same output regardless of env
 - Generating Slack `mrkdwn` strings
 - Reconstructing a full Markdown AST
 - Matching HTML rendering behavior
+- Recreating rich rendering for constructs Slack does not natively support in `markdown` blocks
