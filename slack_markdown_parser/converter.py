@@ -17,6 +17,21 @@ ANSI_ESCAPE_PATTERN = re.compile(
 )
 CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]")
 SLACK_ANGLE_TOKEN_PATTERN = re.compile(r"<[^>\n]+>")
+FENCE_OPEN_PATTERN = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})([^\n]*)$")
+PROTECTED_UNDERSCORE_SPAN_PATTERN = re.compile(
+    r"`[^`\n]+`"
+    r"|\[[^\]\n]+\]\([^\)\n]+\)"
+    r"|<[^>\n]+>"
+    r"|https?://[^\s<]+"
+    r"|mailto:[^\s<]+",
+    re.IGNORECASE,
+)
+DOUBLE_UNDERSCORE_EMPHASIS_PATTERN = re.compile(
+    r"(?<![\\0-9A-Za-z_])__(?=\S)(.+?\S)__(?![0-9A-Za-z_])"
+)
+SINGLE_UNDERSCORE_EMPHASIS_PATTERN = re.compile(
+    r"(?<![\\0-9A-Za-z_])_(?!_)(?=\S)(.+?\S)_(?![0-9A-Za-z_])"
+)
 
 TABLE_SEPARATOR_PATTERN = re.compile(r"^\s*\|[\s\-:|]+\|\s*$")
 LOOSE_TABLE_SEPARATOR_PATTERN = re.compile(
@@ -71,6 +86,87 @@ def sanitize_slack_text(text: str) -> str:
     return SLACK_ANGLE_TOKEN_PATTERN.sub(replace_invalid_token, cleaned)
 
 
+def _match_fence_open(line: str) -> Optional[tuple[str, int]]:
+    match = FENCE_OPEN_PATTERN.match(line)
+    if not match:
+        return None
+    marker = match.group(1)
+    return marker[0], len(marker)
+
+
+def _is_fence_close(line: str, fence: tuple[str, int]) -> bool:
+    marker_char, marker_length = fence
+    return bool(
+        re.match(
+            rf"^[ \t]{{0,3}}{re.escape(marker_char)}{{{marker_length},}}\s*$", line
+        )
+    )
+
+
+def _split_fenced_code_chunks(text: str) -> List[tuple[bool, str]]:
+    chunks: List[tuple[bool, str]] = []
+    if not text:
+        return chunks
+
+    current: List[str] = []
+    active_fence: Optional[tuple[str, int]] = None
+
+    for line in text.splitlines(keepends=True):
+        opening_fence = _match_fence_open(line) if active_fence is None else None
+
+        if opening_fence:
+            if current:
+                chunks.append((False, "".join(current)))
+                current = []
+            current.append(line)
+            active_fence = opening_fence
+            continue
+
+        current.append(line)
+        if active_fence and _is_fence_close(line, active_fence):
+            chunks.append((True, "".join(current)))
+            current = []
+            active_fence = None
+
+    if current:
+        chunks.append((active_fence is not None, "".join(current)))
+
+    return chunks
+
+
+def _normalize_underscore_emphasis_chunk(text: str) -> str:
+    protected_spans: List[str] = []
+
+    def protect(match: re.Match[str]) -> str:
+        token = f"\ufff0{len(protected_spans)}\ufff1"
+        protected_spans.append(match.group(0))
+        return token
+
+    normalized = PROTECTED_UNDERSCORE_SPAN_PATTERN.sub(protect, text)
+    normalized = DOUBLE_UNDERSCORE_EMPHASIS_PATTERN.sub(r"**\1**", normalized)
+    normalized = SINGLE_UNDERSCORE_EMPHASIS_PATTERN.sub(r"*\1*", normalized)
+
+    for idx, original in enumerate(protected_spans):
+        normalized = normalized.replace(f"\ufff0{idx}\ufff1", original)
+
+    return normalized
+
+
+def normalize_underscore_emphasis(text: str) -> str:
+    """Convert underscore emphasis into Slack-compatible asterisk emphasis."""
+    if not text:
+        return text
+
+    chunks = _split_fenced_code_chunks(text)
+    if not chunks:
+        return text
+
+    return "".join(
+        chunk if is_fenced else _normalize_underscore_emphasis_chunk(chunk)
+        for is_fenced, chunk in chunks
+    )
+
+
 def add_zero_width_spaces_to_markdown(text: str) -> str:
     """Stabilize markdown rendering by padding style markers with ZWSP.
 
@@ -113,13 +209,13 @@ def add_zero_width_spaces_to_markdown(text: str) -> str:
             )
         return re.sub(f"{ZWSP}+", ZWSP, segment)
 
-    code_fence_pattern = r"(```.*?```)"
-    parts = re.split(code_fence_pattern, text, flags=re.DOTALL)
-    for idx, part in enumerate(parts):
-        if re.fullmatch(code_fence_pattern, part or "", flags=re.DOTALL):
-            continue
-        parts[idx] = wrap_segment(part)
-    return "".join(parts)
+    chunks = _split_fenced_code_chunks(text)
+    if not chunks:
+        return wrap_segment(text)
+
+    return "".join(
+        chunk if is_fenced else wrap_segment(chunk) for is_fenced, chunk in chunks
+    )
 
 
 # Backward-compatible alias
@@ -181,7 +277,34 @@ def _split_markdown_table_cells(line: str) -> List[str]:
     return cells
 
 
-def _split_heading_and_table_row(line: str) -> Optional[tuple[str, str]]:
+def _count_cell_words(cell_text: str) -> int:
+    tokens = [token for token in cell_text.strip().split() if token]
+    return len(tokens) or 1
+
+
+def _split_heading_prefix_and_first_cell(
+    heading_prefix: str, reference_cell: Optional[str]
+) -> Optional[tuple[str, str]]:
+    tokens = [token for token in heading_prefix.strip().split() if token]
+    if len(tokens) < 2:
+        return None
+
+    first_cell_words = _count_cell_words(reference_cell or "")
+    first_cell_words = min(first_cell_words, len(tokens) - 1)
+    if first_cell_words <= 0:
+        return None
+
+    heading_tokens = tokens[:-first_cell_words]
+    first_cell_tokens = tokens[-first_cell_words:]
+    if not heading_tokens or not first_cell_tokens:
+        return None
+
+    return " ".join(heading_tokens), " ".join(first_cell_tokens)
+
+
+def _split_heading_and_table_row(
+    line: str, next_line: Optional[str] = None
+) -> Optional[tuple[str, str]]:
     """Split lines like '# Heading |a|b|' into heading and table row."""
     if "|" not in line:
         return None
@@ -204,20 +327,48 @@ def _split_heading_and_table_row(line: str) -> Optional[tuple[str, str]]:
     if not heading_part or not heading_part.lstrip().startswith("#"):
         return None
 
-    heading_text = heading_part
-    table_prefix = ""
-    if " " in heading_part.strip():
-        head, tail = heading_part.rsplit(" ", 1)
-        heading_text = head
-        table_prefix = tail
-
-    table_line = (table_prefix + " " + table_part).strip()
-    if "|" not in table_line:
+    heading_match = re.match(r"^([ \t]{0,3}#{1,6})\s+(.+)$", heading_part)
+    if not heading_match:
         return None
-    if not table_line.startswith("|"):
-        table_line = "|" + table_line
-    if not table_line.endswith("|"):
-        table_line = table_line + "|"
+
+    heading_marker = heading_match.group(1)
+    heading_body = heading_match.group(2).strip()
+
+    if not table_part.startswith("|"):
+        table_part = "|" + table_part
+    if not table_part.endswith("|"):
+        table_part = table_part + "|"
+
+    explicit_cells = _split_markdown_table_cells(table_part)
+    if not explicit_cells:
+        return None
+
+    reference_cell: Optional[str] = None
+    if (
+        next_line
+        and "|" in next_line
+        and not LOOSE_TABLE_SEPARATOR_PATTERN.match(next_line.strip())
+    ):
+        next_working = next_line.strip()
+        if not next_working.startswith("|"):
+            next_working = "|" + next_working
+        if not next_working.endswith("|"):
+            next_working = next_working + "|"
+        next_cells = _split_markdown_table_cells(next_working)
+        if next_cells:
+            reference_cell = next_cells[0]
+
+    if reference_cell is None and explicit_cells:
+        reference_cell = explicit_cells[0]
+
+    split_heading = _split_heading_prefix_and_first_cell(heading_body, reference_cell)
+    if not split_heading:
+        return None
+
+    heading_text_body, first_cell = split_heading
+    heading_text = f"{heading_marker} {heading_text_body}"
+    table_cells = [first_cell] + explicit_cells
+    table_line = "|" + "|".join(table_cells) + "|"
 
     return heading_text, table_line
 
@@ -296,10 +447,26 @@ def normalize_markdown_tables(markdown_text: str) -> str:
             normalized.extend(buffer)
         buffer = []
 
-    for line in lines:
+    active_fence: Optional[tuple[str, int]] = None
+
+    for idx, line in enumerate(lines):
+        opening_fence = _match_fence_open(line) if active_fence is None else None
+        if opening_fence:
+            flush_buffer()
+            normalized.append(line)
+            active_fence = opening_fence
+            continue
+
+        if active_fence:
+            normalized.append(line)
+            if _is_fence_close(line, active_fence):
+                active_fence = None
+            continue
+
         stripped = line.strip()
 
-        heading_and_table = _split_heading_and_table_row(line)
+        next_line = lines[idx + 1] if idx + 1 < len(lines) else None
+        heading_and_table = _split_heading_and_table_row(line, next_line)
         if heading_and_table:
             flush_buffer()
             heading_text, table_line = heading_and_table
@@ -472,21 +639,32 @@ def split_markdown_into_segments(markdown_text: str) -> List[Dict[str, str]]:
         current = []
         current_is_table = None
 
+    active_fence: Optional[tuple[str, int]] = None
+
     for line in lines:
         stripped = line.strip()
-        is_table_line = stripped.startswith("|") and stripped.endswith("|")
+        opening_fence = _match_fence_open(line) if active_fence is None else None
+        is_fenced_line = active_fence is not None or opening_fence is not None
+        is_table_line = (
+            False
+            if is_fenced_line
+            else stripped.startswith("|") and stripped.endswith("|")
+        )
 
         if current_is_table is None:
             current_is_table = is_table_line
             current.append(line)
-            continue
-
-        if is_table_line == current_is_table:
+        elif is_table_line == current_is_table:
             current.append(line)
         else:
             flush()
             current_is_table = is_table_line
             current.append(line)
+
+        if opening_fence:
+            active_fence = opening_fence
+        elif active_fence and _is_fence_close(line, active_fence):
+            active_fence = None
 
     flush()
     return segments
@@ -499,6 +677,7 @@ def convert_markdown_to_slack_blocks(markdown_text: str) -> List[Dict[str, Any]]
 
     markdown_text = decode_html_entities(markdown_text)
     markdown_text = sanitize_slack_text(markdown_text)
+    markdown_text = normalize_underscore_emphasis(markdown_text)
     markdown_text = normalize_markdown_tables(markdown_text)
     blocks: List[Dict[str, Any]] = []
 

@@ -16,6 +16,15 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 - CI now runs the test suite on Python 3.10, 3.11, 3.12, and 3.13.
 - `.gitignore` no longer ignores the entire `tests/` directory, so new tests and sample fixtures can be tracked.
 
+## [2.2.1] - 2026-03-07
+
+### Changed
+
+- Normalized underscore emphasis (`_..._`, `__...__`) into Slack-compatible asterisk emphasis before table parsing.
+- Excluded fenced code blocks from table normalization and segment splitting so table-like rows inside code fences stay in `markdown` blocks.
+- Extended fenced-code preservation to tilde fences (`~~~ ... ~~~`) when inserting ZWSP.
+- Improved heading-plus-table rescue so inputs like `### Heading ... Header A | Header B` preserve multi-word first header cells more naturally.
+
 ## [2.0.2] - 2026-03-06
 
 ### Changed

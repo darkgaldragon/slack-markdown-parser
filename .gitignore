@@ -38,6 +38,7 @@ python/
 .vscode/
 .idea/
 .serena/
+docs/_internal/
 AGENTS.md
 CLAUDE.md
 .DS_Store

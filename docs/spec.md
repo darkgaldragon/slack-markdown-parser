@@ -18,9 +18,10 @@ Processing order in `convert_markdown_to_slack_blocks`:
 
 1. HTML entity decode: restore entities such as `&gt;` and `&amp;`
 2. Slack text sanitize: remove ANSI/control noise and neutralize invalid Slack angle-bracket tokens
-3. Table normalization: repair malformed table syntax according to the rules below
-4. Segment split: divide the text into table regions (consecutive lines containing `|`) and non-table regions
-5. Block generation:
+3. Underscore emphasis normalization: convert `_..._` / `__...__` into Slack-compatible `*...*` / `**...**`
+4. Table normalization: repair malformed table syntax according to the rules below
+5. Segment split: divide the text into table regions (consecutive lines containing `|`) and non-table regions
+6. Block generation:
    - Table regions: parse inline cell styling and generate a `table` block. If conversion fails, such as when there are fewer than two candidate lines or the parse result is empty, fall back to a `markdown` block.
    - Non-table regions: add ZWSP where needed and generate a `markdown` block
 
@@ -36,6 +37,18 @@ Behavior of `sanitize_slack_text`:
 - Keep valid Slack angle-bracket tokens such as links, mentions, channels, special mentions, subteam mentions, and `<!date^...>`
 - Replace unsupported angle-bracket tokens such as `<foo>` with full-width brackets (`＜foo＞`) so Slack does not interpret them as malformed special syntax
 - This includes raw HTML-like tags such as `<div>` or `<span>`, which are neutralized instead of being passed through as Slack special syntax
+
+## Underscore emphasis normalization rules
+
+Behavior of `normalize_underscore_emphasis`:
+
+- Convert `_text_` into `*text*`
+- Convert `__text__` into `**text**`
+- Limit conversion to emphasis-style underscores that are not embedded inside ASCII alphanumeric identifiers
+- Preserve identifiers such as `snake_case`
+- Preserve escaped forms such as `\_escaped\_`
+- Preserve underscores inside bare URLs, Markdown links, Slack angle tokens, and inline code
+- Preserve underscores inside fenced code blocks (both `` ``` `` and `~~~`)
 
 ## Table normalization rules
 
@@ -55,6 +68,8 @@ LLMs often emit tables with omitted outer pipes, missing separator rows, or inco
 - Match each row to the header width by filling missing cells with empty cells and truncating extra cells
 - Replace empty cells with `-` when generating the Slack `table` block
 - Split `# Heading |a|b|`-style lines into a heading line and a table row. Pipes inside inline code in the heading are ignored for this detection.
+- When a heading and a header row collapse into one line, such as `### Heading ... Header A | Header B`, use the next row shape as a hint to keep the first header cell as a multi-word phrase when possible.
+- Ignore lines inside fenced code blocks (both `` ``` `` and `~~~`) when collecting table candidates.
 
 ### Preserving literal pipes inside cells
 
@@ -102,7 +117,7 @@ For each formatting token below, if either adjacent side is not a space, tab, ne
 
 ### Excluded regions
 
-- Fenced code blocks (`` ``` ... ``` ``) are never modified
+- Fenced code blocks (both `` ``` ... ``` `` and `~~~ ... ~~~`) are never modified
 - Inline code (`` `...` ``) is not excluded; it is part of the target set above
 
 ## ZWSP removal rules
