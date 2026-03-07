@@ -10,31 +10,20 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 - Added a contributor guide, issue templates, and a pull request template.
 - Added the `py.typed` marker and packaging rules for docs and tests in source distributions.
-- Added an automated LLM-style Markdown corpus fixture and smoke tests.
 
 ### Changed
 
 - CI now runs the test suite on Python 3.10, 3.11, 3.12, and 3.13.
 - `.gitignore` no longer ignores the entire `tests/` directory, so new tests and sample fixtures can be tracked.
-- Clarified the documented conversion pipeline and Slack-oriented behavior in both specs.
 
-### Fixed
-
-- Normalized underscore emphasis (`_..._`, `__...__`) into Slack-compatible asterisk emphasis while preserving snake_case, escaped underscores, URLs, code spans, and links.
-
-## [2.2.0] - 2026-03-07
-
-### Added
-
-- Added public regression coverage for LLM-like Markdown corpus inputs.
+## [2.2.1] - 2026-03-07
 
 ### Changed
 
-- Refreshed the English and Japanese behavior specs to reflect the current conversion pipeline and Slack compatibility rules.
-
-### Fixed
-
-- Converted underscore emphasis into Slack-compatible asterisk emphasis in both markdown blocks and table cells without touching protected spans such as code, links, or bare URLs.
+- Normalized underscore emphasis (`_..._`, `__...__`) into Slack-compatible asterisk emphasis before table parsing.
+- Excluded fenced code blocks from table normalization and segment splitting so table-like rows inside code fences stay in `markdown` blocks.
+- Extended fenced-code preservation to tilde fences (`~~~ ... ~~~`) when inserting ZWSP.
+- Improved heading-plus-table rescue so inputs like `### Heading ... Header A | Header B` preserve multi-word first header cells more naturally.
 
 ## [2.0.2] - 2026-03-06
 

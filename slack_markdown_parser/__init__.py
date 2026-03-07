@@ -1,6 +1,6 @@
 """slack-markdown-parser public package API."""
 
-__version__ = "2.2.0"
+__version__ = "2.2.1"
 __license__ = "MIT"
 
 from .converter import (
@@ -16,6 +16,7 @@ from .converter import (
     extract_plain_text_from_table_cell,
     markdown_table_to_slack_table,
     normalize_markdown_tables,
+    normalize_underscore_emphasis,
     parse_markdown_table,
     sanitize_slack_text,
     split_blocks_by_table,
@@ -36,6 +37,7 @@ __all__ = [
     "extract_plain_text_from_table_cell",
     "markdown_table_to_slack_table",
     "normalize_markdown_tables",
+    "normalize_underscore_emphasis",
     "parse_markdown_table",
     "sanitize_slack_text",
     "split_blocks_by_table",
