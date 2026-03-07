@@ -182,6 +182,28 @@ def test_convert_blocks_neutralizes_html_like_tags() -> None:
     assert blocks[0]["text"] == "Plain ＜div＞html＜/div＞ text"
 
 
+def test_convert_blocks_normalizes_double_underscore_bold_for_slack() -> None:
+    blocks = convert_markdown_to_slack_blocks("日本語の中で__underscore太字__も使う。")
+    assert blocks[0]["text"] == "日本語の中で\u200b**underscore太字**\u200bも使う。"
+
+
+def test_convert_blocks_normalizes_single_underscore_italic_for_slack() -> None:
+    blocks = convert_markdown_to_slack_blocks("日本語の中で_underscore italic_も使う。")
+    assert blocks[0]["text"] == "日本語の中で\u200b*underscore italic*\u200bも使う。"
+
+
+def test_convert_blocks_keeps_snake_case_and_escaped_underscores() -> None:
+    raw = "foo_bar_baz / \\_not italic\\_"
+    blocks = convert_markdown_to_slack_blocks(raw)
+    assert blocks[0]["text"] == raw
+
+
+def test_convert_blocks_does_not_normalize_underscores_inside_urls() -> None:
+    raw = "URL: https://example.com/_private_/path"
+    blocks = convert_markdown_to_slack_blocks(raw)
+    assert blocks[0]["text"] == raw
+
+
 def test_slack_link_in_table_cell_keeps_single_cell() -> None:
     raw = """| Name | Link |
 |---|---|
@@ -203,6 +225,23 @@ def test_markdown_link_in_table_cell_uses_link_label_for_plain_text() -> None:
     table = _first_table(convert_markdown_to_slack_blocks(raw))
     row = table["rows"][1]
     assert extract_plain_text_from_table_cell(row[1]) == "Example"
+
+
+def test_table_cell_underscore_emphasis_is_normalized_before_conversion() -> None:
+    raw = """| Name | Status |
+|---|---|
+| Chloe | _Check_ |
+| Amy | __OK__ |
+"""
+
+    table = _first_table(convert_markdown_to_slack_blocks(raw))
+    italic_cell = table["rows"][1][1]["elements"][0]["elements"][0]
+    bold_cell = table["rows"][2][1]["elements"][0]["elements"][0]
+
+    assert italic_cell["text"] == "Check"
+    assert italic_cell["style"] == {"italic": True}
+    assert bold_cell["text"] == "OK"
+    assert bold_cell["style"] == {"bold": True}
 
 
 def test_table_cell_preserves_link_and_neutralizes_html_like_tags() -> None:

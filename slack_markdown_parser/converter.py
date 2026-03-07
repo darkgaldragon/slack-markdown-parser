@@ -17,6 +17,21 @@ ANSI_ESCAPE_PATTERN = re.compile(
 )
 CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]")
 SLACK_ANGLE_TOKEN_PATTERN = re.compile(r"<[^>\n]+>")
+PROTECTED_UNDERSCORE_SPAN_PATTERN = re.compile(
+    r"```.*?```"
+    r"|``.*?``"
+    r"|`[^`\n]+`"
+    r"|\[[^\]\n]+\]\([^)]+\)"
+    r"|<[^>\n]+>"
+    r"|https?://[^\s<]+",
+    re.DOTALL,
+)
+UNDERSCORE_BOLD_PATTERN = re.compile(
+    r"(?<![\\0-9A-Za-z_])__(?!_)(?=\S)([^\n]*?\S)__(?![0-9A-Za-z_])"
+)
+UNDERSCORE_ITALIC_PATTERN = re.compile(
+    r"(?<![\\0-9A-Za-z_])_(?!_)(?=\S)([^\n]*?\S)_(?![0-9A-Za-z_])"
+)
 
 TABLE_SEPARATOR_PATTERN = re.compile(r"^\s*\|[\s\-:|]+\|\s*$")
 LOOSE_TABLE_SEPARATOR_PATTERN = re.compile(
@@ -69,6 +84,39 @@ def sanitize_slack_text(text: str) -> str:
         return f"＜{token[1:-1]}＞"
 
     return SLACK_ANGLE_TOKEN_PATTERN.sub(replace_invalid_token, cleaned)
+
+
+def normalize_underscore_emphasis(text: str) -> str:
+    """Canonicalize underscore emphasis into asterisk emphasis for Slack.
+
+    Slack `markdown` blocks reliably style `*...*` / `**...**`, but not
+    `_..._` / `__...__`. This keeps identifier-like snake_case text intact by
+    only converting markers that are not attached to ASCII word characters.
+    Protected spans such as code, links, angle-bracket tokens, and bare URLs
+    are left untouched.
+    """
+    if not text:
+        return text
+
+    def normalize_plain_segment(segment: str) -> str:
+        segment = UNDERSCORE_BOLD_PATTERN.sub(r"**\1**", segment)
+        segment = UNDERSCORE_ITALIC_PATTERN.sub(r"*\1*", segment)
+        return segment
+
+    normalized_parts: List[str] = []
+    last_index = 0
+    for match in PROTECTED_UNDERSCORE_SPAN_PATTERN.finditer(text):
+        if match.start() > last_index:
+            normalized_parts.append(
+                normalize_plain_segment(text[last_index : match.start()])
+            )
+        normalized_parts.append(match.group(0))
+        last_index = match.end()
+
+    if last_index < len(text):
+        normalized_parts.append(normalize_plain_segment(text[last_index:]))
+
+    return "".join(normalized_parts)
 
 
 def add_zero_width_spaces_to_markdown(text: str) -> str:
@@ -499,6 +547,7 @@ def convert_markdown_to_slack_blocks(markdown_text: str) -> List[Dict[str, Any]]
 
     markdown_text = decode_html_entities(markdown_text)
     markdown_text = sanitize_slack_text(markdown_text)
+    markdown_text = normalize_underscore_emphasis(markdown_text)
     markdown_text = normalize_markdown_tables(markdown_text)
     blocks: List[Dict[str, Any]] = []
 

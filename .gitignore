@@ -42,3 +42,6 @@ AGENTS.md
 CLAUDE.md
 .DS_Store
 Thumbs.db
+
+# Local/internal validation notes
+docs/_internal/
