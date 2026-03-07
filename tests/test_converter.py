@@ -12,6 +12,7 @@ from slack_markdown_parser import (
     decode_html_entities,
     extract_plain_text_from_table_cell,
     normalize_markdown_tables,
+    normalize_underscore_emphasis,
     sanitize_slack_text,
 )
 
@@ -66,6 +67,20 @@ def test_heading_inline_with_table_is_split() -> None:
     assert headers == ["カテゴリ", "枠1", "枠2"]
 
 
+def test_heading_inline_table_preserves_multiword_first_header_cell() -> None:
+    raw = """### Heading inline table Header A | Header B
+value A | value B
+"""
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+    assert blocks[0]["type"] == "markdown"
+    assert blocks[0]["text"] == "### Heading inline table"
+
+    table = _first_table(blocks)
+    headers = [extract_plain_text_from_table_cell(cell) for cell in table["rows"][0]]
+    assert headers == ["Header A", "Header B"]
+
+
 def test_empty_table_cell_is_filled_with_dash() -> None:
     raw = """| Name | Status |
 |---|---|
@@ -99,6 +114,14 @@ middle text
 
 def test_zero_width_space_not_inserted_inside_code_fence() -> None:
     text = "```\n**not bold**\n```\noutside **bold**"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert "\u200b**not bold**" not in converted
+    assert "**bold**\u200b" in converted
+
+
+def test_zero_width_space_not_inserted_inside_tilde_fence() -> None:
+    text = "~~~\n**not bold**\n~~~\noutside **bold**"
     converted = add_zero_width_spaces_to_markdown(text)
 
     assert "\u200b**not bold**" not in converted
@@ -182,26 +205,35 @@ def test_convert_blocks_neutralizes_html_like_tags() -> None:
     assert blocks[0]["text"] == "Plain ＜div＞html＜/div＞ text"
 
 
-def test_convert_blocks_normalizes_double_underscore_bold_for_slack() -> None:
-    blocks = convert_markdown_to_slack_blocks("日本語の中で__underscore太字__も使う。")
-    assert blocks[0]["text"] == "日本語の中で\u200b**underscore太字**\u200bも使う。"
+def test_normalize_underscore_emphasis_converts_cjk_adjacent_markup() -> None:
+    converted = normalize_underscore_emphasis(
+        "日本語の中で__underscore太字__も使う。日本語の中で_underscore italic_も使う。"
+    )
+
+    assert "**underscore太字**" in converted
+    assert "*underscore italic*" in converted
+    assert "__underscore太字__" not in converted
+    assert "_underscore italic_" not in converted
 
 
-def test_convert_blocks_normalizes_single_underscore_italic_for_slack() -> None:
-    blocks = convert_markdown_to_slack_blocks("日本語の中で_underscore italic_も使う。")
-    assert blocks[0]["text"] == "日本語の中で\u200b*underscore italic*\u200bも使う。"
+def test_normalize_underscore_emphasis_preserves_identifiers_and_escaped_markup() -> (
+    None
+):
+    converted = normalize_underscore_emphasis(
+        r"snake_case はそのまま。\_not bold\_ もそのまま。"
+    )
+
+    assert "snake_case" in converted
+    assert r"\_not bold\_" in converted
 
 
-def test_convert_blocks_keeps_snake_case_and_escaped_underscores() -> None:
-    raw = "foo_bar_baz / \\_not italic\\_"
-    blocks = convert_markdown_to_slack_blocks(raw)
-    assert blocks[0]["text"] == raw
+def test_normalize_underscore_emphasis_preserves_urls_and_angle_tokens() -> None:
+    converted = normalize_underscore_emphasis(
+        "URL https://example.com/a_b と <https://example.com/a_b|A_B>"
+    )
 
-
-def test_convert_blocks_does_not_normalize_underscores_inside_urls() -> None:
-    raw = "URL: https://example.com/_private_/path"
-    blocks = convert_markdown_to_slack_blocks(raw)
-    assert blocks[0]["text"] == raw
+    assert "https://example.com/a_b" in converted
+    assert "<https://example.com/a_b|A_B>" in converted
 
 
 def test_slack_link_in_table_cell_keeps_single_cell() -> None:
@@ -227,21 +259,21 @@ def test_markdown_link_in_table_cell_uses_link_label_for_plain_text() -> None:
     assert extract_plain_text_from_table_cell(row[1]) == "Example"
 
 
-def test_table_cell_underscore_emphasis_is_normalized_before_conversion() -> None:
+def test_underscore_emphasis_is_normalized_inside_table_cells() -> None:
     raw = """| Name | Status |
 |---|---|
-| Chloe | _Check_ |
 | Amy | __OK__ |
+| Chloe | _Check_ |
 """
 
     table = _first_table(convert_markdown_to_slack_blocks(raw))
-    italic_cell = table["rows"][1][1]["elements"][0]["elements"][0]
-    bold_cell = table["rows"][2][1]["elements"][0]["elements"][0]
+    ok_cell = table["rows"][1][1]["elements"][0]["elements"][0]
+    check_cell = table["rows"][2][1]["elements"][0]["elements"][0]
 
-    assert italic_cell["text"] == "Check"
-    assert italic_cell["style"] == {"italic": True}
-    assert bold_cell["text"] == "OK"
-    assert bold_cell["style"] == {"bold": True}
+    assert ok_cell["text"] == "OK"
+    assert ok_cell["style"] == {"bold": True}
+    assert check_cell["text"] == "Check"
+    assert check_cell["style"] == {"italic": True}
 
 
 def test_table_cell_preserves_link_and_neutralizes_html_like_tags() -> None:
@@ -293,6 +325,34 @@ def test_heading_with_inline_code_pipe_is_not_split() -> None:
     blocks = convert_markdown_to_slack_blocks(raw)
     assert all(b.get("type") == "markdown" for b in blocks)
     assert "Title" in blocks[0].get("text", "")
+
+
+def test_code_fence_with_table_like_rows_stays_markdown() -> None:
+    raw = """```
+a | b | c
+--- | --- | ---
+inside code fence, not a table
+```"""
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) == 1
+    assert blocks[0]["type"] == "markdown"
+    assert "a | b | c" in blocks[0]["text"]
+
+
+def test_tilde_code_fence_stays_markdown() -> None:
+    raw = """~~~sql
+select *
+from users
+where id = 1;
+~~~"""
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) == 1
+    assert blocks[0]["type"] == "markdown"
+    assert blocks[0]["text"] == raw
 
 
 def test_escaped_pipe_in_table_cell_strips_backslash() -> None:

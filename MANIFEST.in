@@ -4,6 +4,7 @@ include README-ja.md
 include CONTRIBUTING.md
 include CHANGELOG.md
 recursive-include docs *.md
+prune docs/_internal
 recursive-include tests *.py *.md
 recursive-include slack_markdown_parser py.typed
 global-exclude __pycache__ *.py[cod]
