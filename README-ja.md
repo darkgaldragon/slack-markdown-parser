@@ -20,6 +20,9 @@ Slack Block Kit の `markdown` ブロック（標準 Markdown 構文をそのま
 | 装飾崩れ | 装飾記号の前後に ZWSP（ゼロ幅スペース U+200B）を自動挿入してレンダリングを安定化。通常の半角スペースではなくゼロ幅スペースを使うことで、見た目上の不自然な空白を生じさせずに Slack の装飾解析を補助する |
 | テーブル非対応 | Markdown テーブルを検知して `table` ブロックに変換。LLM の出力する多様なテーブル記法の揺れも自動補完し `invalid_blocks` エラーを回避 |
 
+このライブラリの目標は、CommonMark や HTML を完全再現することではなく、Slack 上で自然に読める表示を作ることです。
+Slack の `markdown` ブロック自体が対応していない構文は、古い `mrkdwn` へ無理に書き換えるより、安全なプレーンテキスト表示や `table` ブロック化を優先します。
+
 ## 主な機能
 
 - 標準 Markdown テキストを `markdown` ブロックに変換
@@ -31,6 +34,32 @@ Slack Block Kit の `markdown` ブロック（標準 Markdown 構文をそのま
 - テーブルセル内の Markdown link / Slack link を認識
 - `chat.postMessage.text` 用の fallback テキストを生成（ブロック内容をプレーンテキスト化して通知プレビュー等に利用）
 - モデル側で Markdown を厳密に制御しなくてもよいよう、Slack 送信前にベストエフォートでサニタイズとテーブル補完を行う
+
+## 実測ベースの Slack 挙動
+
+本ライブラリは、Slack の `markdown` / `table` ブロックが実際にどう見えるかを前提に設計しています。
+
+現在の Slack で安定して表示されるもの:
+
+- `**bold**`, `*italic*`, `~~strike~~`, インラインコード, フェンスドコード
+- bare URL, autolink, Markdown link, 参照リンク, mailto link
+- 箇条書き, 番号付きリスト, タスクリスト, 単純な引用
+- Markdown テーブルを変換した明示的な Slack `table` ブロック
+
+Slack 側の制約として残るもの:
+
+- `#` 見出しや setext 見出しは、真の見出しレベルではなくプレーンテキスト寄りに表示される
+- 多段引用はフル Markdown レンダラほどきれいに出ない
+- 水平線は semantic な区切りではなく線テキスト寄りに見える
+- Markdown 画像記法は `markdown` ブロック内では埋め込み画像にならない
+- 数式, 生 HTML, HTML comment, `<details>`, admonition 記法, Mermaid はリッチ機能としては扱われず、テキストまたはコードとして表示される
+
+本ライブラリが吸収するもの:
+
+- underscore 装飾 (`_..._`, `__...__`) を Slack 互換の asterisk 装飾へ正規化
+- LLM が崩したテーブル記法を補完して Slack `table` ブロックへ変換
+- フェンスドコード内の table 風行をテーブル正規化対象から除外
+- 生 HTML 風タグなど、不正な Slack angle token を無害化
 
 ## 利用前提
 

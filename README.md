@@ -20,6 +20,9 @@ This library leans on Slack Block Kit's `markdown` block for standard Markdown a
 | Formatting instability | Insert zero-width spaces (ZWSP, U+200B) around formatting tokens when needed so Slack parses inline styling more reliably without visible extra spaces. |
 | No table syntax in `mrkdwn` | Detect Markdown tables and convert them into Slack `table` blocks, including repair of common LLM-generated table inconsistencies. |
 
+The target is natural rendering on Slack, not full CommonMark or HTML fidelity.
+If Slack itself does not support a construct in `markdown` blocks, this library prefers safe plain-text rendering or explicit `table` blocks over aggressive rewrites into old `mrkdwn`.
+
 ## Features
 
 - Convert standard Markdown into Slack `markdown` blocks
@@ -31,6 +34,32 @@ This library leans on Slack Block Kit's `markdown` block for standard Markdown a
 - Support Markdown and Slack-style links inside table cells
 - Build fallback text for `chat.postMessage.text` from generated blocks
 - Accept raw LLM Markdown without tightly constraining the model prompt, using best-effort sanitize and table repair before Slack delivery
+
+## Observed Slack behavior
+
+The library is built around how Slack actually renders `markdown` and `table` blocks in practice.
+
+Reliable in current Slack rendering:
+
+- `**bold**`, `*italic*`, `~~strike~~`, inline code, and fenced code blocks
+- Bare URLs, autolinks, Markdown links, reference-style links, and mailto links
+- Bullet lists, ordered lists, task lists, and simple blockquotes
+- Explicit Slack `table` blocks generated from Markdown tables
+
+Known Slack-side limitations:
+
+- Heading syntax (`#`, setext headings) renders as plain text rather than true heading levels
+- Nested blockquotes are weak compared with full Markdown renderers
+- Horizontal rules render more like line text than semantic separators
+- Markdown image syntax does not become an embedded image in `markdown` blocks
+- Math, raw HTML, HTML comments, `<details>`, admonition syntax, and Mermaid are rendered as plain text or code, not as rich features
+
+What this library compensates for:
+
+- Normalizes underscore emphasis (`_..._`, `__...__`) into Slack-friendly asterisk emphasis
+- Repairs malformed LLM-generated tables before converting them into Slack `table` blocks
+- Keeps table-like rows inside fenced code blocks out of table normalization
+- Neutralizes invalid Slack angle-bracket tokens such as raw HTML-like tags
 
 ## Requirements
 
