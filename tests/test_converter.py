@@ -279,12 +279,22 @@ def test_fallback_preserves_user_authored_trailing_space_around_korean_nested_co
     assert payload["text"] == text
 
 
-def test_existing_zwsp_boundaries_do_not_force_visible_spaces() -> None:
+def test_existing_zwsp_boundaries_are_upgraded_for_nested_code_emphasis() -> None:
     text = "詳細は、\u200b**フロント(`App`)**\u200bを確認"
     payload = convert_markdown_to_slack_payloads(text)[0]
 
-    assert payload["blocks"][0]["text"] == text
+    assert payload["blocks"][0]["text"] == "詳細は、 **フロント(`App`)** を確認"
     assert payload["text"] == "詳細は、**フロント(`App`)**を確認"
+
+
+def test_existing_zwsp_boundaries_are_removed_for_english_nested_code_emphasis() -> (
+    None
+):
+    text = "Detail: \u200b**Frontend(`App`)**\u200b check."
+    payload = convert_markdown_to_slack_payloads(text)[0]
+
+    assert payload["blocks"][0]["text"] == "Detail: **Frontend(`App`)** check."
+    assert payload["text"] == "Detail: **Frontend(`App`)** check."
 
 
 def test_bold_markers_inside_inline_code_are_not_rewritten() -> None:

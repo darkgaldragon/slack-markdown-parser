@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional
 ZWSP = "\u200b"
 VISIBLE_BOUNDARY_CHARS = {" ", "\t", "\n", "\r"}
 SYNTH_SPACE_MARKER = "\u2063"
+STRIP_LEFT_ZWSP_MARKER = "\ufff2"
+STRIP_RIGHT_ZWSP_MARKER = "\ufff3"
 
 ANSI_ESCAPE_PATTERN = re.compile(
     r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x1B\x07]*(?:\x07|\x1B\\))"
@@ -304,8 +306,8 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, List[int]]:
         replacements: dict[str, dict[str, str]],
     ) -> str:
         start, end = match.start(), match.end()
-        before_safe = start > 0 and source[start - 1] in boundary_chars
-        after_safe = end < len(source) and source[end] in boundary_chars
+        before_char = source[start - 1] if start > 0 else ""
+        after_char = source[end] if end < len(source) else ""
         strategy = _nested_code_space_strategy(source, start, end, boundary_chars)
         resolved_text = match.group(0)
         for placeholder, replacement in replacements.items():
@@ -313,16 +315,32 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, List[int]]:
                 resolved_text = resolved_text.replace(placeholder, replacement["raw"])
         has_ascii_word = bool(re.search(r"[A-Za-z0-9]", resolved_text))
         if strategy == "ja_zh":
-            prefix = "" if before_safe else f"{SYNTH_SPACE_MARKER} "
-            suffix = "" if after_safe else f"{SYNTH_SPACE_MARKER} "
+            prefix = (
+                ""
+                if before_char in VISIBLE_BOUNDARY_CHARS or not before_char
+                else f"{SYNTH_SPACE_MARKER} "
+            )
+            suffix = (
+                ""
+                if after_char in VISIBLE_BOUNDARY_CHARS or not after_char
+                else f"{SYNTH_SPACE_MARKER} "
+            )
             return f"{prefix}{match.group(0)}{suffix}"
         if strategy == "ko":
             prefix = (
-                "" if before_safe or not has_ascii_word else f"{SYNTH_SPACE_MARKER} "
+                ""
+                if before_char in VISIBLE_BOUNDARY_CHARS or not has_ascii_word
+                else f"{SYNTH_SPACE_MARKER} "
             )
-            suffix = "" if after_safe else f"{SYNTH_SPACE_MARKER} "
+            suffix = (
+                ""
+                if after_char in VISIBLE_BOUNDARY_CHARS or not after_char
+                else f"{SYNTH_SPACE_MARKER} "
+            )
             return f"{prefix}{match.group(0)}{suffix}"
-        return match.group(0)
+        prefix = STRIP_LEFT_ZWSP_MARKER if before_char == ZWSP else ""
+        suffix = STRIP_RIGHT_ZWSP_MARKER if after_char == ZWSP else ""
+        return f"{prefix}{match.group(0)}{suffix}"
 
     def wrap_segment(segment: str) -> tuple[str, List[int]]:
         if not segment:
@@ -373,6 +391,24 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, List[int]]:
                 placeholder, replacement["wrapped"]
             )
 
+        protected_segment = re.sub(
+            f"{ZWSP}{re.escape(SYNTH_SPACE_MARKER)} ",
+            f"{SYNTH_SPACE_MARKER} ",
+            protected_segment,
+        )
+        protected_segment = re.sub(
+            f"{re.escape(SYNTH_SPACE_MARKER)} {ZWSP}",
+            f"{SYNTH_SPACE_MARKER} ",
+            protected_segment,
+        )
+        protected_segment = protected_segment.replace(
+            f"{ZWSP}{STRIP_LEFT_ZWSP_MARKER}", ""
+        )
+        protected_segment = protected_segment.replace(
+            f"{STRIP_RIGHT_ZWSP_MARKER}{ZWSP}", ""
+        )
+        protected_segment = protected_segment.replace(STRIP_LEFT_ZWSP_MARKER, "")
+        protected_segment = protected_segment.replace(STRIP_RIGHT_ZWSP_MARKER, "")
         protected_segment = re.sub(f"{ZWSP}+", ZWSP, protected_segment)
         return _remove_synthetic_space_markers(protected_segment)
 
