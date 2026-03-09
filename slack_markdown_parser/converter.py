@@ -125,6 +125,10 @@ def _nested_code_space_strategy(
     return None
 
 
+def _needs_inner_code_spacing(char: str, boundary_chars: set[str]) -> bool:
+    return bool(char) and char not in boundary_chars and char.isalnum()
+
+
 def _normalize_synthetic_visible_spaces_for_plain_output(text: str) -> str:
     return text
 
@@ -314,6 +318,40 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, List[int]]:
             if placeholder in resolved_text:
                 resolved_text = resolved_text.replace(placeholder, replacement["raw"])
         has_ascii_word = bool(re.search(r"[A-Za-z0-9]", resolved_text))
+        adjusted_text = match.group(0)
+
+        if strategy in {"ja_zh", "ko"}:
+            for placeholder in replacements:
+                search_from = 0
+                while True:
+                    position = adjusted_text.find(placeholder, search_from)
+                    if position == -1:
+                        break
+                    before_inner = adjusted_text[position - 1] if position > 0 else ""
+                    after_position = position + len(placeholder)
+                    after_inner = (
+                        adjusted_text[after_position]
+                        if after_position < len(adjusted_text)
+                        else ""
+                    )
+                    prefix = (
+                        f"{SYNTH_SPACE_MARKER} "
+                        if _needs_inner_code_spacing(before_inner, boundary_chars)
+                        else ""
+                    )
+                    suffix = (
+                        f"{SYNTH_SPACE_MARKER} "
+                        if _needs_inner_code_spacing(after_inner, boundary_chars)
+                        else ""
+                    )
+                    replacement_text = f"{prefix}{placeholder}{suffix}"
+                    adjusted_text = (
+                        adjusted_text[:position]
+                        + replacement_text
+                        + adjusted_text[position + len(placeholder) :]
+                    )
+                    search_from = position + len(replacement_text)
+
         if strategy == "ja_zh":
             prefix = (
                 ""
@@ -325,7 +363,7 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, List[int]]:
                 if after_char in VISIBLE_BOUNDARY_CHARS or not after_char
                 else f"{SYNTH_SPACE_MARKER} "
             )
-            return f"{prefix}{match.group(0)}{suffix}"
+            return f"{prefix}{adjusted_text}{suffix}"
         if strategy == "ko":
             prefix = (
                 ""
@@ -337,10 +375,10 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, List[int]]:
                 if after_char in VISIBLE_BOUNDARY_CHARS or not after_char
                 else f"{SYNTH_SPACE_MARKER} "
             )
-            return f"{prefix}{match.group(0)}{suffix}"
+            return f"{prefix}{adjusted_text}{suffix}"
         prefix = STRIP_LEFT_ZWSP_MARKER if before_char == ZWSP else ""
         suffix = STRIP_RIGHT_ZWSP_MARKER if after_char == ZWSP else ""
-        return f"{prefix}{match.group(0)}{suffix}"
+        return f"{prefix}{adjusted_text}{suffix}"
 
     def wrap_segment(segment: str) -> tuple[str, List[int]]:
         if not segment:

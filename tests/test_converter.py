@@ -297,6 +297,39 @@ def test_existing_zwsp_boundaries_are_removed_for_english_nested_code_emphasis()
     assert payload["text"] == "Detail: **Frontend(`App`)** check."
 
 
+def test_japanese_nested_code_inside_italic_gets_internal_spacing() -> None:
+    text = "詳細は、*外側`内側`装飾*を確認してください。"
+    payload = convert_markdown_to_slack_payloads(text)[0]
+
+    assert (
+        payload["blocks"][0]["text"]
+        == "詳細は、 *外側 `内側` 装飾* を確認してください。"
+    )
+    assert payload["text"] == text
+
+
+def test_japanese_nested_code_inside_strike_gets_internal_spacing() -> None:
+    text = "詳細は、~~外側`内側`装飾~~を確認してください。"
+    payload = convert_markdown_to_slack_payloads(text)[0]
+
+    assert (
+        payload["blocks"][0]["text"]
+        == "詳細は、 ~~外側 `内側` 装飾~~ を確認してください。"
+    )
+    assert payload["text"] == text
+
+
+def test_nested_code_next_to_parentheses_does_not_gain_internal_spacing() -> None:
+    text = "詳細は、**外側(`内側`)装飾**を確認してください。"
+    payload = convert_markdown_to_slack_payloads(text)[0]
+
+    assert (
+        payload["blocks"][0]["text"]
+        == "詳細は、 **外側(`内側`)装飾** を確認してください。"
+    )
+    assert payload["text"] == text
+
+
 def test_bold_markers_inside_inline_code_are_not_rewritten() -> None:
     text = "コードは`**literal**`です。"
     converted = add_zero_width_spaces_to_markdown(text)
