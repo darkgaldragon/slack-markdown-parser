@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 ZWSP = "\u200b"
 VISIBLE_BOUNDARY_CHARS = {" ", "\t", "\n", "\r"}
+SYNTH_SPACE_MARKER = "\u2063"
 
 ANSI_ESCAPE_PATTERN = re.compile(
     r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x1B\x07]*(?:\x07|\x1B\\))"
@@ -64,6 +65,10 @@ def decode_html_entities(text: str) -> str:
 def strip_zero_width_spaces(text: str) -> str:
     """Strip zero-width spaces from text."""
     return re.sub(r"[\u200B\uFEFF]", "", text or "")
+
+
+class _AnnotatedSlackBlock(dict):
+    """Dict-like block carrying non-serialized metadata for local helpers."""
 
 
 def _is_hangul_char(char: str) -> bool:
@@ -119,58 +124,40 @@ def _nested_code_space_strategy(
 
 
 def _normalize_synthetic_visible_spaces_for_plain_output(text: str) -> str:
-    if not text:
+    return text
+
+
+def _strip_synthetic_spaces_from_plain_text(
+    text: str, synthetic_space_indices: Optional[List[int]] = None
+) -> str:
+    if not text or not synthetic_space_indices:
         return text
 
-    emphasis_patterns = [
-        re.compile(r"(?<!\*)\*\*(.+?)\*\*(?!\*)", flags=re.DOTALL),
-        re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", flags=re.DOTALL),
-        re.compile(r"~~(.+?)~~", flags=re.DOTALL),
-    ]
+    indices = set(synthetic_space_indices)
+    return "".join(
+        char for idx, char in enumerate(text) if not (idx in indices and char == " ")
+    )
 
-    candidates: List[re.Match[str]] = []
-    for pattern in emphasis_patterns:
-        candidates.extend(
-            match for match in pattern.finditer(text) if "`" in match.group(0)
-        )
 
-    candidates.sort(key=lambda match: (match.start(), -(match.end() - match.start())))
-    matches: List[re.Match[str]] = []
-    last_end = -1
-    for match in candidates:
-        if match.start() < last_end:
+def _remove_synthetic_space_markers(text: str) -> tuple[str, List[int]]:
+    if not text or SYNTH_SPACE_MARKER not in text:
+        return text, []
+
+    cleaned: List[str] = []
+    synthetic_indices: List[int] = []
+    mark_next_space = False
+
+    for char in text:
+        if char == SYNTH_SPACE_MARKER:
+            mark_next_space = True
             continue
-        matches.append(match)
-        last_end = match.end()
 
-    if not matches:
-        return text
+        if mark_next_space and char == " ":
+            synthetic_indices.append(len(cleaned))
+        cleaned.append(char)
+        mark_next_space = False
 
-    parts: List[str] = []
-    cursor = 0
-    for match in matches:
-        start, end = match.start(), match.end()
-        strategy = _nested_code_space_strategy(
-            text, start, end, boundary_chars=VISIBLE_BOUNDARY_CHARS
-        )
-        has_ascii_word = bool(re.search(r"[A-Za-z0-9]", match.group(0)))
-        prefix_segment = text[cursor:start]
-        if (
-            strategy in {"ja_zh", "ko"}
-            and has_ascii_word
-            and prefix_segment.endswith(" ")
-        ):
-            prefix_segment = prefix_segment[:-1]
-        elif strategy == "ja_zh" and prefix_segment.endswith(" "):
-            prefix_segment = prefix_segment[:-1]
-        parts.append(prefix_segment)
-        parts.append(match.group(0))
-        cursor = end
-        if strategy in {"ja_zh", "ko"} and cursor < len(text) and text[cursor] == " ":
-            cursor += 1
-
-    parts.append(text[cursor:])
-    return "".join(parts)
+    return "".join(cleaned), synthetic_indices
 
 
 def _is_allowed_slack_angle_token(token: str) -> bool:
@@ -280,10 +267,16 @@ def add_zero_width_spaces_to_markdown(text: str) -> str:
 
     Code fences are preserved untouched.
     """
-    if not text:
-        return text
+    formatted, _ = _format_markdown_with_spacing_metadata(text)
+    return formatted
 
-    boundary_chars = {*VISIBLE_BOUNDARY_CHARS, ZWSP}
+
+def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, List[int]]:
+    """Return formatted markdown text plus synthetic visible-space positions."""
+    if not text:
+        return text, []
+
+    boundary_chars = {*VISIBLE_BOUNDARY_CHARS, ZWSP, SYNTH_SPACE_MARKER}
     inline_code_pattern = re.compile(r"(?<!`)`[^`\n]+`(?!`)", flags=re.DOTALL)
     emphasis_patterns = [
         re.compile(r"(?<!\*)\*\*(.+?)\*\*(?!\*)", flags=re.DOTALL),
@@ -311,8 +304,8 @@ def add_zero_width_spaces_to_markdown(text: str) -> str:
         replacements: dict[str, dict[str, str]],
     ) -> str:
         start, end = match.start(), match.end()
-        before_visible = start > 0 and source[start - 1] in VISIBLE_BOUNDARY_CHARS
-        after_visible = end < len(source) and source[end] in VISIBLE_BOUNDARY_CHARS
+        before_safe = start > 0 and source[start - 1] in boundary_chars
+        after_safe = end < len(source) and source[end] in boundary_chars
         strategy = _nested_code_space_strategy(source, start, end, boundary_chars)
         resolved_text = match.group(0)
         for placeholder, replacement in replacements.items():
@@ -320,22 +313,20 @@ def add_zero_width_spaces_to_markdown(text: str) -> str:
                 resolved_text = resolved_text.replace(placeholder, replacement["raw"])
         has_ascii_word = bool(re.search(r"[A-Za-z0-9]", resolved_text))
         if strategy == "ja_zh":
-            prefix = "" if before_visible else " "
-            suffix = "" if after_visible else " "
-            if prefix or suffix:
-                return f"{prefix}{match.group(0)}{suffix}"
-            return match.group(0)
+            prefix = "" if before_safe else f"{SYNTH_SPACE_MARKER} "
+            suffix = "" if after_safe else f"{SYNTH_SPACE_MARKER} "
+            return f"{prefix}{match.group(0)}{suffix}"
         if strategy == "ko":
-            prefix = "" if before_visible or not has_ascii_word else " "
-            suffix = "" if after_visible else " "
-            if prefix or suffix:
-                return f"{prefix}{match.group(0)}{suffix}"
-            return match.group(0)
+            prefix = (
+                "" if before_safe or not has_ascii_word else f"{SYNTH_SPACE_MARKER} "
+            )
+            suffix = "" if after_safe else f"{SYNTH_SPACE_MARKER} "
+            return f"{prefix}{match.group(0)}{suffix}"
         return match.group(0)
 
-    def wrap_segment(segment: str) -> str:
+    def wrap_segment(segment: str) -> tuple[str, List[int]]:
         if not segment:
-            return segment
+            return segment, []
 
         placeholder_map: dict[str, dict[str, str]] = {}
         protected_parts: List[str] = []
@@ -382,15 +373,27 @@ def add_zero_width_spaces_to_markdown(text: str) -> str:
                 placeholder, replacement["wrapped"]
             )
 
-        return re.sub(f"{ZWSP}+", ZWSP, protected_segment)
+        protected_segment = re.sub(f"{ZWSP}+", ZWSP, protected_segment)
+        return _remove_synthetic_space_markers(protected_segment)
 
     chunks = _split_fenced_code_chunks(text)
     if not chunks:
         return wrap_segment(text)
 
-    return "".join(
-        chunk if is_fenced else wrap_segment(chunk) for is_fenced, chunk in chunks
-    )
+    combined_parts: List[str] = []
+    combined_indices: List[int] = []
+    offset = 0
+    for is_fenced, chunk in chunks:
+        if is_fenced:
+            combined_parts.append(chunk)
+            offset += len(chunk)
+            continue
+        formatted_chunk, synthetic_indices = wrap_segment(chunk)
+        combined_parts.append(formatted_chunk)
+        combined_indices.extend(offset + idx for idx in synthetic_indices)
+        offset += len(formatted_chunk)
+
+    return "".join(combined_parts), combined_indices
 
 
 # Backward-compatible alias
@@ -867,9 +870,11 @@ def convert_markdown_to_slack_blocks(markdown_text: str) -> List[Dict[str, Any]]
                 blocks.append(table_block)
                 continue
 
-        formatted = add_zero_width_spaces_to_markdown(content)
+        formatted, synthetic_indices = _format_markdown_with_spacing_metadata(content)
         if formatted.strip():
-            blocks.append({"type": "markdown", "text": formatted})
+            block = _AnnotatedSlackBlock({"type": "markdown", "text": formatted})
+            block._synthetic_space_indices = synthetic_indices
+            blocks.append(block)
 
     return blocks
 
@@ -932,8 +937,9 @@ def blocks_to_plain_text(blocks: List[Dict[str, Any]]) -> str:
             text = block.get("text", "")
             if text:
                 parts.append(
-                    _normalize_synthetic_visible_spaces_for_plain_output(
-                        strip_zero_width_spaces(text)
+                    _strip_synthetic_spaces_from_plain_text(
+                        strip_zero_width_spaces(text),
+                        getattr(block, "_synthetic_space_indices", None),
                     )
                 )
         elif block_type == "table":
@@ -965,8 +971,9 @@ def build_fallback_text_from_blocks(blocks: List[Dict[str, Any]]) -> str:
             continue
 
         if block.get("type") == "markdown":
-            text = _normalize_synthetic_visible_spaces_for_plain_output(
-                strip_zero_width_spaces(block.get("text", ""))
+            text = _strip_synthetic_spaces_from_plain_text(
+                strip_zero_width_spaces(block.get("text", "")),
+                getattr(block, "_synthetic_space_indices", None),
             )
             if text.strip():
                 plain_parts.append(text)
