@@ -11,6 +11,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 ZWSP = "\u200b"
+VISIBLE_BOUNDARY_CHARS = {" ", "\t", "\n", "\r"}
 
 ANSI_ESCAPE_PATTERN = re.compile(
     r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x1B\x07]*(?:\x07|\x1B\\))"
@@ -63,6 +64,113 @@ def decode_html_entities(text: str) -> str:
 def strip_zero_width_spaces(text: str) -> str:
     """Strip zero-width spaces from text."""
     return re.sub(r"[\u200B\uFEFF]", "", text or "")
+
+
+def _is_hangul_char(char: str) -> bool:
+    if not char:
+        return False
+    codepoint = ord(char)
+    return (
+        0x1100 <= codepoint <= 0x11FF
+        or 0x3130 <= codepoint <= 0x318F
+        or 0xAC00 <= codepoint <= 0xD7AF
+    )
+
+
+def _is_han_or_kana_char(char: str) -> bool:
+    if not char:
+        return False
+    codepoint = ord(char)
+    return (
+        0x3040 <= codepoint <= 0x309F
+        or 0x30A0 <= codepoint <= 0x30FF
+        or 0x3400 <= codepoint <= 0x4DBF
+        or 0x4E00 <= codepoint <= 0x9FFF
+        or 0xF900 <= codepoint <= 0xFAFF
+    )
+
+
+def _nested_code_space_strategy(
+    source: str,
+    start: int,
+    end: int,
+    boundary_chars: Optional[set[str]] = None,
+) -> str | None:
+    boundary_chars = boundary_chars or {*VISIBLE_BOUNDARY_CHARS, ZWSP}
+    neighbors = []
+
+    left_idx = start - 1
+    while left_idx >= 0 and source[left_idx] in boundary_chars:
+        left_idx -= 1
+    if left_idx >= 0:
+        neighbors.append(source[left_idx])
+
+    right_idx = end
+    while right_idx < len(source) and source[right_idx] in boundary_chars:
+        right_idx += 1
+    if right_idx < len(source):
+        neighbors.append(source[right_idx])
+
+    if any(_is_han_or_kana_char(char) for char in neighbors):
+        return "ja_zh"
+    if any(_is_hangul_char(char) for char in neighbors):
+        return "ko"
+    return None
+
+
+def _normalize_synthetic_visible_spaces_for_plain_output(text: str) -> str:
+    if not text:
+        return text
+
+    emphasis_patterns = [
+        re.compile(r"(?<!\*)\*\*(.+?)\*\*(?!\*)", flags=re.DOTALL),
+        re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", flags=re.DOTALL),
+        re.compile(r"~~(.+?)~~", flags=re.DOTALL),
+    ]
+
+    candidates: List[re.Match[str]] = []
+    for pattern in emphasis_patterns:
+        candidates.extend(
+            match for match in pattern.finditer(text) if "`" in match.group(0)
+        )
+
+    candidates.sort(key=lambda match: (match.start(), -(match.end() - match.start())))
+    matches: List[re.Match[str]] = []
+    last_end = -1
+    for match in candidates:
+        if match.start() < last_end:
+            continue
+        matches.append(match)
+        last_end = match.end()
+
+    if not matches:
+        return text
+
+    parts: List[str] = []
+    cursor = 0
+    for match in matches:
+        start, end = match.start(), match.end()
+        strategy = _nested_code_space_strategy(
+            text, start, end, boundary_chars=VISIBLE_BOUNDARY_CHARS
+        )
+        has_ascii_word = bool(re.search(r"[A-Za-z0-9]", match.group(0)))
+        prefix_segment = text[cursor:start]
+        if (
+            strategy in {"ja_zh", "ko"}
+            and has_ascii_word
+            and prefix_segment.endswith(" ")
+        ):
+            prefix_segment = prefix_segment[:-1]
+        elif strategy == "ja_zh" and prefix_segment.endswith(" "):
+            prefix_segment = prefix_segment[:-1]
+        parts.append(prefix_segment)
+        parts.append(match.group(0))
+        cursor = end
+        if strategy in {"ja_zh", "ko"} and cursor < len(text) and text[cursor] == " ":
+            cursor += 1
+
+    parts.append(text[cursor:])
+    return "".join(parts)
 
 
 def _is_allowed_slack_angle_token(token: str) -> bool:
@@ -175,7 +283,13 @@ def add_zero_width_spaces_to_markdown(text: str) -> str:
     if not text:
         return text
 
-    boundary_chars = {" ", "\t", "\n", "\r", ZWSP}
+    boundary_chars = {*VISIBLE_BOUNDARY_CHARS, ZWSP}
+    inline_code_pattern = re.compile(r"(?<!`)`[^`\n]+`(?!`)", flags=re.DOTALL)
+    emphasis_patterns = [
+        re.compile(r"(?<!\*)\*\*(.+?)\*\*(?!\*)", flags=re.DOTALL),
+        re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", flags=re.DOTALL),
+        re.compile(r"~~(.+?)~~", flags=re.DOTALL),
+    ]
 
     def wrap_match(match: re.Match[str], source: str) -> str:
         start, end = match.start(), match.end()
@@ -191,23 +305,84 @@ def add_zero_width_spaces_to_markdown(text: str) -> str:
         suffix = ZWSP
         return f"{prefix}{match.group(0)}{suffix}"
 
+    def wrap_nested_code_emphasis_match(
+        match: re.Match[str],
+        source: str,
+        replacements: dict[str, dict[str, str]],
+    ) -> str:
+        start, end = match.start(), match.end()
+        before_visible = start > 0 and source[start - 1] in VISIBLE_BOUNDARY_CHARS
+        after_visible = end < len(source) and source[end] in VISIBLE_BOUNDARY_CHARS
+        strategy = _nested_code_space_strategy(source, start, end, boundary_chars)
+        resolved_text = match.group(0)
+        for placeholder, replacement in replacements.items():
+            if placeholder in resolved_text:
+                resolved_text = resolved_text.replace(placeholder, replacement["raw"])
+        has_ascii_word = bool(re.search(r"[A-Za-z0-9]", resolved_text))
+        if strategy == "ja_zh":
+            prefix = "" if before_visible else " "
+            suffix = "" if after_visible else " "
+            if prefix or suffix:
+                return f"{prefix}{match.group(0)}{suffix}"
+            return match.group(0)
+        if strategy == "ko":
+            prefix = "" if before_visible or not has_ascii_word else " "
+            suffix = "" if after_visible else " "
+            if prefix or suffix:
+                return f"{prefix}{match.group(0)}{suffix}"
+            return match.group(0)
+        return match.group(0)
+
     def wrap_segment(segment: str) -> str:
         if not segment:
             return segment
-        patterns = [
-            r"(?<!`)`[^`\n]+`(?!`)",
-            r"(?<!\*)\*\*(.+?)\*\*(?!\*)",
-            r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)",
-            r"~~(.+?)~~",
-        ]
-        for pattern in patterns:
-            segment = re.sub(
-                pattern,
-                lambda m, s=segment: wrap_match(m, s),
-                segment,
-                flags=re.DOTALL,
+
+        placeholder_map: dict[str, dict[str, str]] = {}
+        protected_parts: List[str] = []
+        last_end = 0
+
+        for idx, match in enumerate(inline_code_pattern.finditer(segment)):
+            placeholder = f"\ufff0code{idx}\ufff1"
+            protected_parts.append(segment[last_end : match.start()])
+            protected_parts.append(placeholder)
+            placeholder_map[placeholder] = {
+                "raw": match.group(0),
+                "wrapped": wrap_match(match, segment),
+            }
+            last_end = match.end()
+
+        protected_parts.append(segment[last_end:])
+        protected_segment = "".join(protected_parts)
+
+        placeholders_inside_emphasis: set[str] = set()
+        for pattern in emphasis_patterns:
+            for match in pattern.finditer(protected_segment):
+                matched_text = match.group(0)
+                for placeholder in placeholder_map:
+                    if placeholder in matched_text:
+                        placeholders_inside_emphasis.add(placeholder)
+
+        for placeholder in placeholders_inside_emphasis:
+            placeholder_map[placeholder]["wrapped"] = placeholder_map[placeholder][
+                "raw"
+            ]
+
+        for pattern in emphasis_patterns:
+            protected_segment = pattern.sub(
+                lambda m, s=protected_segment: (
+                    wrap_nested_code_emphasis_match(m, s, placeholder_map)
+                    if any(placeholder in m.group(0) for placeholder in placeholder_map)
+                    else wrap_match(m, s)
+                ),
+                protected_segment,
             )
-        return re.sub(f"{ZWSP}+", ZWSP, segment)
+
+        for placeholder, replacement in placeholder_map.items():
+            protected_segment = protected_segment.replace(
+                placeholder, replacement["wrapped"]
+            )
+
+        return re.sub(f"{ZWSP}+", ZWSP, protected_segment)
 
     chunks = _split_fenced_code_chunks(text)
     if not chunks:
@@ -756,7 +931,11 @@ def blocks_to_plain_text(blocks: List[Dict[str, Any]]) -> str:
         if block_type == "markdown":
             text = block.get("text", "")
             if text:
-                parts.append(strip_zero_width_spaces(text))
+                parts.append(
+                    _normalize_synthetic_visible_spaces_for_plain_output(
+                        strip_zero_width_spaces(text)
+                    )
+                )
         elif block_type == "table":
             rows = block.get("rows") or []
             for row in rows:
@@ -786,7 +965,9 @@ def build_fallback_text_from_blocks(blocks: List[Dict[str, Any]]) -> str:
             continue
 
         if block.get("type") == "markdown":
-            text = strip_zero_width_spaces(block.get("text", ""))
+            text = _normalize_synthetic_visible_spaces_for_plain_output(
+                strip_zero_width_spaces(block.get("text", ""))
+            )
             if text.strip():
                 plain_parts.append(text)
         elif block.get("type") == "table":

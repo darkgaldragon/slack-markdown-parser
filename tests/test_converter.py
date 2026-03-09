@@ -135,6 +135,139 @@ def test_inline_code_without_spaces_is_padded_with_zwsp() -> None:
     assert "詳細ログIDは\u200b`run-20260305-02`\u200bです。" == converted
 
 
+def test_inline_code_inside_bold_with_english_punctuation_wraps_only_outer_bold() -> (
+    None
+):
+    text = "1. **Frontend (`App.tsx`)**: The quick brown fox jumps over the lazy dog."
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert text == converted
+
+
+def test_inline_code_inside_bold_with_japanese_spacing_does_not_get_inner_zwsp() -> (
+    None
+):
+    text = "詳細は **フロントエンド (`App.tsx`)** を確認してください。"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert "詳細は **フロントエンド (`App.tsx`)** を確認してください。" == converted
+
+
+def test_inline_code_inside_bold_with_tight_japanese_boundaries_is_left_as_raw() -> (
+    None
+):
+    text = "詳細は、**フロントエンド (`App.tsx`)**を確認してください。"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert "詳細は、 **フロントエンド (`App.tsx`)** を確認してください。" == converted
+
+
+def test_inline_code_inside_bold_with_left_space_only_in_japanese_gets_right_space() -> (
+    None
+):
+    text = "詳細は、 **フロントエンド (`App.tsx`)**を確認してください。"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert "詳細は、 **フロントエンド (`App.tsx`)** を確認してください。" == converted
+
+
+def test_inline_code_inside_bold_with_right_space_only_in_japanese_gets_left_space() -> (
+    None
+):
+    text = "詳細は、**フロントエンド (`App.tsx`)** を確認してください。"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert "詳細は、 **フロントエンド (`App.tsx`)** を確認してください。" == converted
+
+
+def test_inline_code_inside_bold_with_tight_chinese_boundaries_gets_visible_spaces() -> (
+    None
+):
+    text = "详情，**外侧(`内侧`)样式**请确认。"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert "详情， **外侧(`内侧`)样式** 请确认。" == converted
+
+
+def test_inline_code_inside_bold_with_tight_korean_boundaries_gets_right_space_only() -> (
+    None
+):
+    text = "설명,**바깥(`내부`)강조**입니다."
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert "설명,**바깥(`내부`)강조** 입니다." == converted
+
+
+def test_inline_code_inside_bold_with_right_space_in_korean_is_preserved() -> None:
+    text = "설명,**바깥(`내부`)강조** 입니다."
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert text == converted
+
+
+def test_fallback_text_normalizes_synthetic_spaces_for_japanese_nested_code() -> None:
+    text = "詳細は、**フロントエンド (`App.tsx`)**を確認してください。"
+    payload = convert_markdown_to_slack_payloads(text)[0]
+
+    assert (
+        payload["blocks"][0]["text"]
+        == "詳細は、 **フロントエンド (`App.tsx`)** を確認してください。"
+    )
+    assert payload["text"] == text
+
+
+def test_plain_text_normalizes_synthetic_spaces_for_chinese_nested_code() -> None:
+    text = "详情，**外侧(`内侧`)样式**请确认。"
+    blocks = convert_markdown_to_slack_blocks(text)
+
+    assert blocks_to_plain_text(blocks) == text
+    assert build_fallback_text_from_blocks(blocks) == text
+
+
+def test_fallback_text_normalizes_synthetic_spaces_for_korean_nested_code() -> None:
+    text = "설명,**바깥(`내부`)강조**입니다."
+    payload = convert_markdown_to_slack_payloads(text)[0]
+
+    assert payload["blocks"][0]["text"] == "설명,**바깥(`내부`)강조** 입니다."
+    assert payload["text"] == text
+
+
+def test_mixed_language_japanese_context_normalizes_fallback_text() -> None:
+    text = "詳細は**Frontend (`App.tsx`)**を確認してください。"
+    payload = convert_markdown_to_slack_payloads(text)[0]
+
+    assert (
+        payload["blocks"][0]["text"]
+        == "詳細は **Frontend (`App.tsx`)** を確認してください。"
+    )
+    assert payload["text"] == text
+
+
+def test_mixed_language_english_context_keeps_original_spacing() -> None:
+    text = "Please check **機能A (`ID-1`)** now."
+    payload = convert_markdown_to_slack_payloads(text)[0]
+
+    assert payload["blocks"][0]["text"] == text
+    assert payload["text"] == text
+
+
+def test_mixed_language_korean_context_adds_visible_spaces_around_english_nested_code() -> (
+    None
+):
+    text = "설명은**Frontend (`App.tsx`)**입니다."
+    payload = convert_markdown_to_slack_payloads(text)[0]
+
+    assert payload["blocks"][0]["text"] == "설명은 **Frontend (`App.tsx`)** 입니다."
+    assert payload["text"] == text
+
+
+def test_bold_markers_inside_inline_code_are_not_rewritten() -> None:
+    text = "コードは`**literal**`です。"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert "コードは\u200b`**literal**`\u200bです。" == converted
+
+
 def test_bold_with_punctuation_on_only_one_side_is_wrapped_on_both_sides() -> None:
     text = (
         "GDPval は **70.9%→83.0%**、"
