@@ -17,7 +17,7 @@ This library leans on Slack Block Kit's `markdown` block for standard Markdown a
 | Problem | Approach |
 |---|---|
 | Conversion overhead | Send standard Markdown through Slack `markdown` blocks without rewriting it into `mrkdwn`. |
-| Formatting instability | Insert zero-width spaces (ZWSP, U+200B) around formatting tokens when needed so Slack parses inline styling more reliably without visible extra spaces. |
+| Formatting instability | Prefer zero-width spaces (ZWSP, U+200B) around formatting tokens, and fall back to locale-aware visible-space padding for CJK nested inline-code cases where Slack rendering still breaks. |
 | No table syntax in `mrkdwn` | Detect Markdown tables and convert them into Slack `table` blocks, including repair of common LLM-generated table inconsistencies. |
 
 The target is natural rendering on Slack, not full CommonMark or HTML fidelity.
@@ -31,8 +31,9 @@ If Slack itself does not support a construct in `markdown` blocks, this library 
 - Split output into multiple Slack messages when needed to satisfy Slack's "one table per message" constraint
 - Sanitize ANSI/control characters and neutralize invalid Slack angle-bracket tokens before block generation
 - Add ZWSP around inline formatting tokens to reduce rendering issues outside fenced code blocks
+- Use locale-aware visible-space padding for nested inline-code emphasis in dense Japanese, Chinese, and Korean text when Slack requires stronger boundaries than ZWSP alone
 - Support Markdown and Slack-style links inside table cells
-- Build fallback text for `chat.postMessage.text` from generated blocks
+- Build fallback text for `chat.postMessage.text` from generated blocks, normalizing synthetic ZWSP and any parser-inserted visible-space padding used only for rendering stability
 - Accept raw LLM Markdown without tightly constraining the model prompt, using best-effort sanitize and table repair before Slack delivery
 
 ## Observed Slack behavior
@@ -57,6 +58,7 @@ Known Slack-side limitations:
 What this library compensates for:
 
 - Normalizes underscore emphasis (`_..._`, `__...__`) into Slack-friendly asterisk emphasis
+- Wraps bare URLs into Slack-friendly autolink form before sending `markdown` blocks
 - Repairs malformed LLM-generated tables before converting them into Slack `table` blocks
 - Keeps table-like rows inside fenced code blocks out of table normalization
 - Neutralizes invalid Slack angle-bracket tokens such as raw HTML-like tags
@@ -173,6 +175,9 @@ These are also part of the public package surface:
 
 - Behavior spec: [docs/spec.md](docs/spec.md)
 - Japanese behavior spec: [docs/spec-ja.md](docs/spec-ja.md)
+- Slack render-test workflow: [docs/slack-render-test-workflow.md](docs/slack-render-test-workflow.md)
+- Nested-modifier findings: [docs/slack-nested-modifier-findings.md](docs/slack-nested-modifier-findings.md)
+- Desktop/mobile manual checklist: [docs/slack-client-manual-checklist.md](docs/slack-client-manual-checklist.md)
 - Non-goals:
   - Generating Slack `mrkdwn` strings
   - Supporting clients or MCP tools that can only send `mrkdwn`

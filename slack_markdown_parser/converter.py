@@ -11,12 +11,17 @@ import re
 from typing import Any, Dict, List, Optional
 
 ZWSP = "\u200b"
+VISIBLE_BOUNDARY_CHARS = {" ", "\t", "\n", "\r"}
+SYNTH_SPACE_MARKER = "\u2063"
+STRIP_LEFT_ZWSP_MARKER = "\ufff2"
+STRIP_RIGHT_ZWSP_MARKER = "\ufff3"
 
 ANSI_ESCAPE_PATTERN = re.compile(
     r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x1B\x07]*(?:\x07|\x1B\\))"
 )
 CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]")
 SLACK_ANGLE_TOKEN_PATTERN = re.compile(r"<[^>\n]+>")
+BARE_URL_PATTERN = re.compile(r"https?://[^\s<]+", re.IGNORECASE)
 FENCE_OPEN_PATTERN = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})([^\n]*)$")
 PROTECTED_UNDERSCORE_SPAN_PATTERN = re.compile(
     r"`[^`\n]+`"
@@ -65,8 +70,175 @@ def strip_zero_width_spaces(text: str) -> str:
     return re.sub(r"[\u200B\uFEFF]", "", text or "")
 
 
+class _AnnotatedSlackBlock(dict):
+    """Dict-like block carrying non-serialized metadata for local helpers."""
+
+
+def _is_hangul_char(char: str) -> bool:
+    if not char:
+        return False
+    codepoint = ord(char)
+    return (
+        0x1100 <= codepoint <= 0x11FF
+        or 0x3130 <= codepoint <= 0x318F
+        or 0xAC00 <= codepoint <= 0xD7AF
+    )
+
+
+def _is_han_or_kana_char(char: str) -> bool:
+    if not char:
+        return False
+    codepoint = ord(char)
+    return (
+        0x3040 <= codepoint <= 0x309F
+        or 0x30A0 <= codepoint <= 0x30FF
+        or 0x3400 <= codepoint <= 0x4DBF
+        or 0x4E00 <= codepoint <= 0x9FFF
+        or 0xF900 <= codepoint <= 0xFAFF
+    )
+
+
+def _nested_code_space_strategy(
+    source: str,
+    start: int,
+    end: int,
+    boundary_chars: Optional[set[str]] = None,
+) -> str | None:
+    boundary_chars = boundary_chars or {*VISIBLE_BOUNDARY_CHARS, ZWSP}
+    neighbors = []
+
+    left_idx = start - 1
+    while left_idx >= 0 and source[left_idx] in boundary_chars:
+        left_idx -= 1
+    if left_idx >= 0:
+        neighbors.append(source[left_idx])
+
+    right_idx = end
+    while right_idx < len(source) and source[right_idx] in boundary_chars:
+        right_idx += 1
+    if right_idx < len(source):
+        neighbors.append(source[right_idx])
+
+    if any(_is_han_or_kana_char(char) for char in neighbors):
+        return "ja_zh"
+    if any(_is_hangul_char(char) for char in neighbors):
+        return "ko"
+    return None
+
+
+def _needs_inner_code_spacing(char: str, boundary_chars: set[str]) -> bool:
+    return bool(char) and char not in boundary_chars and char.isalnum()
+
+
+def _normalize_synthetic_visible_spaces_for_plain_output(text: str) -> str:
+    return text
+
+
+def _normalize_markdown_block_plain_text(text: str) -> str:
+    if not text:
+        return text
+
+    return re.sub(r"<(https?://[^>\s|]+)>", r"\1", text)
+
+
+def _strip_synthetic_spaces_from_plain_text(
+    text: str, synthetic_space_indices: Optional[List[int]] = None
+) -> str:
+    if not text or not synthetic_space_indices:
+        return text
+
+    indices = set(synthetic_space_indices)
+    return "".join(
+        char for idx, char in enumerate(text) if not (idx in indices and char == " ")
+    )
+
+
+def _remove_synthetic_space_markers(text: str) -> tuple[str, List[int]]:
+    if not text or SYNTH_SPACE_MARKER not in text:
+        return text, []
+
+    cleaned: List[str] = []
+    synthetic_indices: List[int] = []
+    mark_next_space = False
+
+    for char in text:
+        if char == SYNTH_SPACE_MARKER:
+            mark_next_space = True
+            continue
+
+        if mark_next_space and char == " ":
+            synthetic_indices.append(len(cleaned))
+        cleaned.append(char)
+        mark_next_space = False
+
+    return "".join(cleaned), synthetic_indices
+
+
 def _is_allowed_slack_angle_token(token: str) -> bool:
     return any(pattern.match(token) for pattern in ALLOWED_SLACK_ANGLE_TOKEN_PATTERNS)
+
+
+def normalize_bare_urls_for_slack_markdown(text: str) -> str:
+    """Wrap bare URLs in autolink syntax for stable Slack markdown rendering."""
+    if not text:
+        return text
+
+    markdown_link_pattern = re.compile(r"\[[^\]\n]+\]\([^\)\n]+\)")
+    bare_url_pattern = BARE_URL_PATTERN
+
+    def wrap_chunk(chunk: str) -> str:
+        parts: List[str] = []
+        cursor = 0
+        length = len(chunk)
+
+        while cursor < length:
+            char = chunk[cursor]
+
+            if char == "<":
+                closing = chunk.find(">", cursor + 1)
+                if closing != -1:
+                    token = chunk[cursor : closing + 1]
+                    if _is_allowed_slack_angle_token(token):
+                        parts.append(token)
+                        cursor = closing + 1
+                        continue
+
+            if char == "[":
+                link_match = markdown_link_pattern.match(chunk, cursor)
+                if link_match:
+                    parts.append(link_match.group(0))
+                    cursor = link_match.end()
+                    continue
+
+            if char == "`":
+                delimiter_end = cursor
+                while delimiter_end < length and chunk[delimiter_end] == "`":
+                    delimiter_end += 1
+                delimiter = chunk[cursor:delimiter_end]
+                closing = chunk.find(delimiter, delimiter_end)
+                if closing != -1:
+                    parts.append(chunk[cursor : closing + len(delimiter)])
+                    cursor = closing + len(delimiter)
+                    continue
+
+            url_match = bare_url_pattern.match(chunk, cursor)
+            if url_match:
+                parts.append(f"<{url_match.group(0)}>")
+                cursor = url_match.end()
+                continue
+
+            parts.append(char)
+            cursor += 1
+
+        return "".join(parts)
+
+    chunks = _split_fenced_code_chunks(text)
+    if not chunks:
+        return wrap_chunk(text)
+
+    return "".join(
+        chunk if is_fenced else wrap_chunk(chunk) for is_fenced, chunk in chunks
+    )
 
 
 def sanitize_slack_text(text: str) -> str:
@@ -172,10 +344,22 @@ def add_zero_width_spaces_to_markdown(text: str) -> str:
 
     Code fences are preserved untouched.
     """
-    if not text:
-        return text
+    formatted, _ = _format_markdown_with_spacing_metadata(text)
+    return formatted
 
-    boundary_chars = {" ", "\t", "\n", "\r", ZWSP}
+
+def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, List[int]]:
+    """Return formatted markdown text plus synthetic visible-space positions."""
+    if not text:
+        return text, []
+
+    boundary_chars = {*VISIBLE_BOUNDARY_CHARS, ZWSP, SYNTH_SPACE_MARKER}
+    inline_code_pattern = re.compile(r"(?<!`)`[^`\n]+`(?!`)", flags=re.DOTALL)
+    emphasis_patterns = [
+        re.compile(r"(?<!\*)\*\*(.+?)\*\*(?!\*)", flags=re.DOTALL),
+        re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", flags=re.DOTALL),
+        re.compile(r"~~(.+?)~~", flags=re.DOTALL),
+    ]
 
     def wrap_match(match: re.Match[str], source: str) -> str:
         start, end = match.start(), match.end()
@@ -191,31 +375,170 @@ def add_zero_width_spaces_to_markdown(text: str) -> str:
         suffix = ZWSP
         return f"{prefix}{match.group(0)}{suffix}"
 
-    def wrap_segment(segment: str) -> str:
-        if not segment:
-            return segment
-        patterns = [
-            r"(?<!`)`[^`\n]+`(?!`)",
-            r"(?<!\*)\*\*(.+?)\*\*(?!\*)",
-            r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)",
-            r"~~(.+?)~~",
-        ]
-        for pattern in patterns:
-            segment = re.sub(
-                pattern,
-                lambda m, s=segment: wrap_match(m, s),
-                segment,
-                flags=re.DOTALL,
+    def wrap_nested_code_emphasis_match(
+        match: re.Match[str],
+        source: str,
+        replacements: dict[str, dict[str, str]],
+    ) -> str:
+        start, end = match.start(), match.end()
+        before_char = source[start - 1] if start > 0 else ""
+        after_char = source[end] if end < len(source) else ""
+        strategy = _nested_code_space_strategy(source, start, end, boundary_chars)
+        resolved_text = match.group(0)
+        for placeholder, replacement in replacements.items():
+            if placeholder in resolved_text:
+                resolved_text = resolved_text.replace(placeholder, replacement["raw"])
+        has_ascii_word = bool(re.search(r"[A-Za-z0-9]", resolved_text))
+        adjusted_text = match.group(0)
+
+        if strategy in {"ja_zh", "ko"}:
+            for placeholder in replacements:
+                search_from = 0
+                while True:
+                    position = adjusted_text.find(placeholder, search_from)
+                    if position == -1:
+                        break
+                    before_inner = adjusted_text[position - 1] if position > 0 else ""
+                    after_position = position + len(placeholder)
+                    after_inner = (
+                        adjusted_text[after_position]
+                        if after_position < len(adjusted_text)
+                        else ""
+                    )
+                    prefix = (
+                        f"{SYNTH_SPACE_MARKER} "
+                        if _needs_inner_code_spacing(before_inner, boundary_chars)
+                        else ""
+                    )
+                    suffix = (
+                        f"{SYNTH_SPACE_MARKER} "
+                        if _needs_inner_code_spacing(after_inner, boundary_chars)
+                        else ""
+                    )
+                    replacement_text = f"{prefix}{placeholder}{suffix}"
+                    adjusted_text = (
+                        adjusted_text[:position]
+                        + replacement_text
+                        + adjusted_text[position + len(placeholder) :]
+                    )
+                    search_from = position + len(replacement_text)
+
+        if strategy == "ja_zh":
+            prefix = (
+                ""
+                if before_char in VISIBLE_BOUNDARY_CHARS or not before_char
+                else f"{SYNTH_SPACE_MARKER} "
             )
-        return re.sub(f"{ZWSP}+", ZWSP, segment)
+            suffix = (
+                ""
+                if after_char in VISIBLE_BOUNDARY_CHARS or not after_char
+                else f"{SYNTH_SPACE_MARKER} "
+            )
+            return f"{prefix}{adjusted_text}{suffix}"
+        if strategy == "ko":
+            prefix = (
+                ""
+                if before_char in VISIBLE_BOUNDARY_CHARS or not has_ascii_word
+                else f"{SYNTH_SPACE_MARKER} "
+            )
+            suffix = (
+                ""
+                if after_char in VISIBLE_BOUNDARY_CHARS or not after_char
+                else f"{SYNTH_SPACE_MARKER} "
+            )
+            return f"{prefix}{adjusted_text}{suffix}"
+        prefix = STRIP_LEFT_ZWSP_MARKER if before_char == ZWSP else ""
+        suffix = STRIP_RIGHT_ZWSP_MARKER if after_char == ZWSP else ""
+        return f"{prefix}{adjusted_text}{suffix}"
+
+    def wrap_segment(segment: str) -> tuple[str, List[int]]:
+        if not segment:
+            return segment, []
+
+        placeholder_map: dict[str, dict[str, str]] = {}
+        protected_parts: List[str] = []
+        last_end = 0
+
+        for idx, match in enumerate(inline_code_pattern.finditer(segment)):
+            placeholder = f"\ufff0code{idx}\ufff1"
+            protected_parts.append(segment[last_end : match.start()])
+            protected_parts.append(placeholder)
+            placeholder_map[placeholder] = {
+                "raw": match.group(0),
+                "wrapped": wrap_match(match, segment),
+            }
+            last_end = match.end()
+
+        protected_parts.append(segment[last_end:])
+        protected_segment = "".join(protected_parts)
+
+        placeholders_inside_emphasis: set[str] = set()
+        for pattern in emphasis_patterns:
+            for match in pattern.finditer(protected_segment):
+                matched_text = match.group(0)
+                for placeholder in placeholder_map:
+                    if placeholder in matched_text:
+                        placeholders_inside_emphasis.add(placeholder)
+
+        for placeholder in placeholders_inside_emphasis:
+            placeholder_map[placeholder]["wrapped"] = placeholder_map[placeholder][
+                "raw"
+            ]
+
+        for pattern in emphasis_patterns:
+            protected_segment = pattern.sub(
+                lambda m, s=protected_segment: (
+                    wrap_nested_code_emphasis_match(m, s, placeholder_map)
+                    if any(placeholder in m.group(0) for placeholder in placeholder_map)
+                    else wrap_match(m, s)
+                ),
+                protected_segment,
+            )
+
+        for placeholder, replacement in placeholder_map.items():
+            protected_segment = protected_segment.replace(
+                placeholder, replacement["wrapped"]
+            )
+
+        protected_segment = re.sub(
+            f"{ZWSP}{re.escape(SYNTH_SPACE_MARKER)} ",
+            f"{SYNTH_SPACE_MARKER} ",
+            protected_segment,
+        )
+        protected_segment = re.sub(
+            f"{re.escape(SYNTH_SPACE_MARKER)} {ZWSP}",
+            f"{SYNTH_SPACE_MARKER} ",
+            protected_segment,
+        )
+        protected_segment = protected_segment.replace(
+            f"{ZWSP}{STRIP_LEFT_ZWSP_MARKER}", ""
+        )
+        protected_segment = protected_segment.replace(
+            f"{STRIP_RIGHT_ZWSP_MARKER}{ZWSP}", ""
+        )
+        protected_segment = protected_segment.replace(STRIP_LEFT_ZWSP_MARKER, "")
+        protected_segment = protected_segment.replace(STRIP_RIGHT_ZWSP_MARKER, "")
+        protected_segment = re.sub(f"{ZWSP}+", ZWSP, protected_segment)
+        return _remove_synthetic_space_markers(protected_segment)
 
     chunks = _split_fenced_code_chunks(text)
     if not chunks:
         return wrap_segment(text)
 
-    return "".join(
-        chunk if is_fenced else wrap_segment(chunk) for is_fenced, chunk in chunks
-    )
+    combined_parts: List[str] = []
+    combined_indices: List[int] = []
+    offset = 0
+    for is_fenced, chunk in chunks:
+        if is_fenced:
+            combined_parts.append(chunk)
+            offset += len(chunk)
+            continue
+        formatted_chunk, synthetic_indices = wrap_segment(chunk)
+        combined_parts.append(formatted_chunk)
+        combined_indices.extend(offset + idx for idx in synthetic_indices)
+        offset += len(formatted_chunk)
+
+    return "".join(combined_parts), combined_indices
 
 
 # Backward-compatible alias
@@ -678,6 +1001,7 @@ def convert_markdown_to_slack_blocks(markdown_text: str) -> List[Dict[str, Any]]
     markdown_text = decode_html_entities(markdown_text)
     markdown_text = sanitize_slack_text(markdown_text)
     markdown_text = normalize_underscore_emphasis(markdown_text)
+    markdown_text = normalize_bare_urls_for_slack_markdown(markdown_text)
     markdown_text = normalize_markdown_tables(markdown_text)
     blocks: List[Dict[str, Any]] = []
 
@@ -692,9 +1016,11 @@ def convert_markdown_to_slack_blocks(markdown_text: str) -> List[Dict[str, Any]]
                 blocks.append(table_block)
                 continue
 
-        formatted = add_zero_width_spaces_to_markdown(content)
+        formatted, synthetic_indices = _format_markdown_with_spacing_metadata(content)
         if formatted.strip():
-            blocks.append({"type": "markdown", "text": formatted})
+            block = _AnnotatedSlackBlock({"type": "markdown", "text": formatted})
+            block._synthetic_space_indices = synthetic_indices
+            blocks.append(block)
 
     return blocks
 
@@ -756,7 +1082,14 @@ def blocks_to_plain_text(blocks: List[Dict[str, Any]]) -> str:
         if block_type == "markdown":
             text = block.get("text", "")
             if text:
-                parts.append(strip_zero_width_spaces(text))
+                parts.append(
+                    _normalize_markdown_block_plain_text(
+                        _strip_synthetic_spaces_from_plain_text(
+                            strip_zero_width_spaces(text),
+                            getattr(block, "_synthetic_space_indices", None),
+                        )
+                    )
+                )
         elif block_type == "table":
             rows = block.get("rows") or []
             for row in rows:
@@ -786,7 +1119,12 @@ def build_fallback_text_from_blocks(blocks: List[Dict[str, Any]]) -> str:
             continue
 
         if block.get("type") == "markdown":
-            text = strip_zero_width_spaces(block.get("text", ""))
+            text = _normalize_markdown_block_plain_text(
+                _strip_synthetic_spaces_from_plain_text(
+                    strip_zero_width_spaces(block.get("text", "")),
+                    getattr(block, "_synthetic_space_indices", None),
+                )
+            )
             if text.strip():
                 plain_parts.append(text)
         elif block.get("type") == "table":

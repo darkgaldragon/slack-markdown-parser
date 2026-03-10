@@ -59,6 +59,7 @@ The following behaviors are based on practical validation against real Slack cli
 ### Behaviors this parser compensates for
 
 - `_..._` and `__...__` are normalized into Slack-friendly `*...*` and `**...**`
+- Bare URLs are wrapped into Slack-friendly autolink form (`<https://...>`) before `markdown` block delivery
 - Malformed Markdown tables are repaired before `table` block generation
 - Table-like rows inside fenced code blocks are kept out of table parsing
 - Unsupported Slack angle-bracket tokens such as `<foo>` or raw HTML-like tags are neutralized
@@ -139,7 +140,7 @@ Behavior of `add_zero_width_spaces_to_markdown`:
 
 ### Purpose
 
-In languages such as Japanese that do not use spaces between words, formatting markers can attach directly to surrounding characters and break Slack rendering. This library inserts zero-width spaces instead of visible spaces so Slack gets clearer formatting boundaries without changing the visible layout.
+In languages such as Japanese that do not use spaces between words, formatting markers can attach directly to surrounding characters and break Slack rendering. This library primarily inserts zero-width spaces so Slack gets clearer formatting boundaries without changing the visible layout. For some nested inline-code emphasis cases in dense CJK text, it falls back to visible spaces because current Slack rendering is more reliable with explicit spacing.
 
 ### Target patterns
 
@@ -154,6 +155,10 @@ For each formatting token below, if either adjacent side is not a space, tab, ne
 
 - Fenced code blocks (both `` ``` ... ``` `` and `~~~ ... ~~~`) are never modified
 - Inline code (`` `...` ``) is not excluded; it is part of the target set above
+- Inline code nested inside `**bold**`, `*italic*`, or `~~strike~~` is left untouched.
+- For English-like boundaries around those nested combinations, the outer formatting span is preserved as-is.
+- For dense Japanese/Chinese boundaries, visible spaces are inserted on the missing outer side(s) around the outer formatting span.
+- For dense Korean boundaries, a visible trailing space is inserted when needed, while right-space cases are otherwise preserved because Slack already renders them more reliably.
 
 ## ZWSP removal rules
 
@@ -178,6 +183,7 @@ For each formatting token below, if either adjacent side is not a space, tab, ne
 `build_fallback_text_from_blocks` generates preview text for `chat.postMessage.text` as follows:
 
 - `markdown` blocks: text with ZWSP removed
+- Parser-inserted visible spaces used only to stabilize nested inline-code emphasis are normalized back out when building plain fallback text
 - `table` blocks: join each row's cell text with ` | `
 - Join block outputs with blank lines between them
 
