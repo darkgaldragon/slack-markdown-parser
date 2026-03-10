@@ -58,6 +58,7 @@ Slack 側の制約として残るもの:
 本ライブラリが吸収するもの:
 
 - underscore 装飾 (`_..._`, `__...__`) を Slack 互換の asterisk 装飾へ正規化
+- bare URL を Slack の `markdown` ブロックで安定する autolink 形式へ正規化
 - LLM が崩したテーブル記法を補完して Slack `table` ブロックへ変換
 - フェンスドコード内の table 風行をテーブル正規化対象から除外
 - 生 HTML 風タグなど、不正な Slack angle token を無害化

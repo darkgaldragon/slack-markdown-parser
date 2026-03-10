@@ -58,6 +58,7 @@ Known Slack-side limitations:
 What this library compensates for:
 
 - Normalizes underscore emphasis (`_..._`, `__...__`) into Slack-friendly asterisk emphasis
+- Wraps bare URLs into Slack-friendly autolink form before sending `markdown` blocks
 - Repairs malformed LLM-generated tables before converting them into Slack `table` blocks
 - Keeps table-like rows inside fenced code blocks out of table normalization
 - Neutralizes invalid Slack angle-bracket tokens such as raw HTML-like tags

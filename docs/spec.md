@@ -59,6 +59,7 @@ The following behaviors are based on practical validation against real Slack cli
 ### Behaviors this parser compensates for
 
 - `_..._` and `__...__` are normalized into Slack-friendly `*...*` and `**...**`
+- Bare URLs are wrapped into Slack-friendly autolink form (`<https://...>`) before `markdown` block delivery
 - Malformed Markdown tables are repaired before `table` block generation
 - Table-like rows inside fenced code blocks are kept out of table parsing
 - Unsupported Slack angle-bracket tokens such as `<foo>` or raw HTML-like tags are neutralized

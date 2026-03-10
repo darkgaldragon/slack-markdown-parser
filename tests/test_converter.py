@@ -15,6 +15,7 @@ from slack_markdown_parser import (
     normalize_underscore_emphasis,
     sanitize_slack_text,
 )
+from slack_markdown_parser.converter import normalize_bare_urls_for_slack_markdown
 
 
 def _first_table(blocks: list[dict]) -> dict:
@@ -436,6 +437,38 @@ def test_normalize_underscore_emphasis_preserves_urls_and_angle_tokens() -> None
 
     assert "https://example.com/a_b" in converted
     assert "<https://example.com/a_b|A_B>" in converted
+
+
+def test_normalize_bare_urls_wraps_plain_http_links() -> None:
+    converted = normalize_bare_urls_for_slack_markdown(
+        "Bare URL: https://example.com/path_(demo)?a=1&b=2#frag"
+    )
+
+    assert converted == "Bare URL: <https://example.com/path_(demo)?a=1&b=2#frag>"
+
+
+def test_normalize_bare_urls_preserves_markdown_links_and_code_spans() -> None:
+    converted = normalize_bare_urls_for_slack_markdown(
+        "Docs: [Example](https://example.com/docs) and `https://example.com/code`"
+    )
+
+    assert "[Example](https://example.com/docs)" in converted
+    assert "`https://example.com/code`" in converted
+
+
+def test_fallback_unwraps_inserted_bare_url_autolinks() -> None:
+    text = (
+        "Bare URL: https://example.com/path_(demo)?a=1&b=2#frag\n"
+        "Markdown link: [Example Docs](https://example.com/docs)"
+    )
+    payload = convert_markdown_to_slack_payloads(text)[0]
+
+    assert (
+        payload["blocks"][0]["text"]
+        == "Bare URL: <https://example.com/path_(demo)?a=1&b=2#frag>\n"
+        "Markdown link: [Example Docs](https://example.com/docs)"
+    )
+    assert payload["text"] == text
 
 
 def test_slack_link_in_table_cell_keeps_single_cell() -> None:

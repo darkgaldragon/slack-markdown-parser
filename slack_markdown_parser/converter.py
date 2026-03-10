@@ -21,6 +21,7 @@ ANSI_ESCAPE_PATTERN = re.compile(
 )
 CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]")
 SLACK_ANGLE_TOKEN_PATTERN = re.compile(r"<[^>\n]+>")
+BARE_URL_PATTERN = re.compile(r"https?://[^\s<]+", re.IGNORECASE)
 FENCE_OPEN_PATTERN = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})([^\n]*)$")
 PROTECTED_UNDERSCORE_SPAN_PATTERN = re.compile(
     r"`[^`\n]+`"
@@ -133,6 +134,13 @@ def _normalize_synthetic_visible_spaces_for_plain_output(text: str) -> str:
     return text
 
 
+def _normalize_markdown_block_plain_text(text: str) -> str:
+    if not text:
+        return text
+
+    return re.sub(r"<(https?://[^>\s|]+)>", r"\1", text)
+
+
 def _strip_synthetic_spaces_from_plain_text(
     text: str, synthetic_space_indices: Optional[List[int]] = None
 ) -> str:
@@ -168,6 +176,69 @@ def _remove_synthetic_space_markers(text: str) -> tuple[str, List[int]]:
 
 def _is_allowed_slack_angle_token(token: str) -> bool:
     return any(pattern.match(token) for pattern in ALLOWED_SLACK_ANGLE_TOKEN_PATTERNS)
+
+
+def normalize_bare_urls_for_slack_markdown(text: str) -> str:
+    """Wrap bare URLs in autolink syntax for stable Slack markdown rendering."""
+    if not text:
+        return text
+
+    markdown_link_pattern = re.compile(r"\[[^\]\n]+\]\([^\)\n]+\)")
+    bare_url_pattern = BARE_URL_PATTERN
+
+    def wrap_chunk(chunk: str) -> str:
+        parts: List[str] = []
+        cursor = 0
+        length = len(chunk)
+
+        while cursor < length:
+            char = chunk[cursor]
+
+            if char == "<":
+                closing = chunk.find(">", cursor + 1)
+                if closing != -1:
+                    token = chunk[cursor : closing + 1]
+                    if _is_allowed_slack_angle_token(token):
+                        parts.append(token)
+                        cursor = closing + 1
+                        continue
+
+            if char == "[":
+                link_match = markdown_link_pattern.match(chunk, cursor)
+                if link_match:
+                    parts.append(link_match.group(0))
+                    cursor = link_match.end()
+                    continue
+
+            if char == "`":
+                delimiter_end = cursor
+                while delimiter_end < length and chunk[delimiter_end] == "`":
+                    delimiter_end += 1
+                delimiter = chunk[cursor:delimiter_end]
+                closing = chunk.find(delimiter, delimiter_end)
+                if closing != -1:
+                    parts.append(chunk[cursor : closing + len(delimiter)])
+                    cursor = closing + len(delimiter)
+                    continue
+
+            url_match = bare_url_pattern.match(chunk, cursor)
+            if url_match:
+                parts.append(f"<{url_match.group(0)}>")
+                cursor = url_match.end()
+                continue
+
+            parts.append(char)
+            cursor += 1
+
+        return "".join(parts)
+
+    chunks = _split_fenced_code_chunks(text)
+    if not chunks:
+        return wrap_chunk(text)
+
+    return "".join(
+        chunk if is_fenced else wrap_chunk(chunk) for is_fenced, chunk in chunks
+    )
 
 
 def sanitize_slack_text(text: str) -> str:
@@ -930,6 +1001,7 @@ def convert_markdown_to_slack_blocks(markdown_text: str) -> List[Dict[str, Any]]
     markdown_text = decode_html_entities(markdown_text)
     markdown_text = sanitize_slack_text(markdown_text)
     markdown_text = normalize_underscore_emphasis(markdown_text)
+    markdown_text = normalize_bare_urls_for_slack_markdown(markdown_text)
     markdown_text = normalize_markdown_tables(markdown_text)
     blocks: List[Dict[str, Any]] = []
 
@@ -1011,9 +1083,11 @@ def blocks_to_plain_text(blocks: List[Dict[str, Any]]) -> str:
             text = block.get("text", "")
             if text:
                 parts.append(
-                    _strip_synthetic_spaces_from_plain_text(
-                        strip_zero_width_spaces(text),
-                        getattr(block, "_synthetic_space_indices", None),
+                    _normalize_markdown_block_plain_text(
+                        _strip_synthetic_spaces_from_plain_text(
+                            strip_zero_width_spaces(text),
+                            getattr(block, "_synthetic_space_indices", None),
+                        )
                     )
                 )
         elif block_type == "table":
@@ -1045,9 +1119,11 @@ def build_fallback_text_from_blocks(blocks: List[Dict[str, Any]]) -> str:
             continue
 
         if block.get("type") == "markdown":
-            text = _strip_synthetic_spaces_from_plain_text(
-                strip_zero_width_spaces(block.get("text", "")),
-                getattr(block, "_synthetic_space_indices", None),
+            text = _normalize_markdown_block_plain_text(
+                _strip_synthetic_spaces_from_plain_text(
+                    strip_zero_width_spaces(block.get("text", "")),
+                    getattr(block, "_synthetic_space_indices", None),
+                )
             )
             if text.strip():
                 plain_parts.append(text)
