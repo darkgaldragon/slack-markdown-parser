@@ -6,16 +6,22 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-03-10
+
 ### Added
 
-- Added a contributor guide, issue templates, and a pull request template.
-- Added the `py.typed` marker and packaging rules for docs and tests in source distributions.
+- Added Slack render-test tooling, generated regression fixtures, and maintainer docs for validating real Slack client rendering across Web, desktop, and mobile.
 
 ### Changed
 
-- CI now runs the test suite on Python 3.10, 3.11, 3.12, and 3.13.
-- `.gitignore` no longer ignores the entire `tests/` directory, so new tests and sample fixtures can be tracked.
 - Refreshed the README and behavior spec to distinguish Slack renderer limitations from parser-owned normalization and repair behavior.
+- Clarified locale-aware formatting behavior and added public examples for the Slack render-test workflow.
+
+### Fixed
+
+- Stabilized nested inline-code emphasis rendering across English, Japanese, Chinese, and Korean contexts, including existing-ZWSP boundaries and CJK italic/strike cases.
+- Preserved user-authored spacing in fallback text while removing parser-inserted rendering-only padding.
+- Wrapped bare URLs into Slack-friendly autolink form before sending `markdown` blocks so adjacent lines no longer collapse into malformed angle-link text.
 
 ## [2.2.1] - 2026-03-07
 
