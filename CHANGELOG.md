@@ -6,6 +6,19 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 ## [Unreleased]
 
+## [2.2.4] - 2026-03-11
+
+### Changed
+
+- Published a follow-up release so the packaged artifacts match the merged 2.2.3 source changes exactly.
+
+### Fixed
+
+- Preserved multi-backtick inline-code spans when splitting table cells and heading-plus-table lines, so pipes inside code spans no longer break parsing.
+- Extended Slack table rich-text cell conversion to keep multi-backtick code spans intact in rendered table cells.
+- Reduced fallback text generation overhead by removing the redundant second plain-text pass during payload assembly.
+- Simplified nested modifier formatting internals so placeholder handling scales more predictably on long messages.
+
 ## [2.2.3] - 2026-03-11
 
 ### Changed
