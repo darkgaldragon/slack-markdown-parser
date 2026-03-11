@@ -23,6 +23,14 @@ CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]")
 SLACK_ANGLE_TOKEN_PATTERN = re.compile(r"<[^>\n]+>")
 BARE_URL_PATTERN = re.compile(r"https?://[^\s<]+", re.IGNORECASE)
 FENCE_OPEN_PATTERN = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})([^\n]*)$")
+MARKDOWN_LINK_PATTERN = re.compile(r"\[[^\]\n]+\]\([^\)\n]+\)")
+INLINE_CODE_SPAN_PATTERN = re.compile(r"(?<!`)`[^`\n]+`(?!`)", flags=re.DOTALL)
+EMPHASIS_PATTERNS = (
+    re.compile(r"(?<!\*)\*\*(.+?)\*\*(?!\*)", flags=re.DOTALL),
+    re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", flags=re.DOTALL),
+    re.compile(r"~~(.+?)~~", flags=re.DOTALL),
+)
+INLINE_CODE_PLACEHOLDER_PATTERN = re.compile(r"\ufff0code\d+\ufff1")
 PROTECTED_UNDERSCORE_SPAN_PATTERN = re.compile(
     r"`[^`\n]+`"
     r"|\[[^\]\n]+\]\([^\)\n]+\)"
@@ -43,9 +51,14 @@ LOOSE_TABLE_SEPARATOR_PATTERN = re.compile(
     r"^\s*\|?\s*:?-{3,}\s*(\|\s*:?-{3,}\s*)+\|?\s*$"
 )
 TABLE_TOKEN_PATTERN = re.compile(
-    r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)"
-    r"|<(https?://[^>\s|]+)(?:\|([^>\n]+))?>"
-    r"|(`[^`]+`|~~[^~]+~~|\*\*[^*]+\*\*|(?<!\*)\*[^*]+\*(?!\*))"
+    r"\[(?P<markdown_label>[^\]\n]+)\]\((?P<markdown_url>https?://[^\s)]+)\)"
+    r"|<(?P<angle_url>https?://[^>\s|]+)(?:\|(?P<angle_label>[^>\n]+))?>"
+    r"|(?P<token>"
+    r"(?P<code>(?P<code_delimiter>`+)(?P<code_text>[^\n]+?)(?P=code_delimiter))"
+    r"|~~[^~]+~~"
+    r"|\*\*[^*]+\*\*"
+    r"|(?<!\*)\*[^*]+\*(?!\*)"
+    r")"
 )
 ALLOWED_SLACK_ANGLE_TOKEN_PATTERNS = (
     re.compile(r"^<https?://[^>\s|]+(?:\|[^>\n]+)?>$"),
@@ -130,10 +143,6 @@ def _needs_inner_code_spacing(char: str, boundary_chars: set[str]) -> bool:
     return bool(char) and char not in boundary_chars and char.isalnum()
 
 
-def _normalize_synthetic_visible_spaces_for_plain_output(text: str) -> str:
-    return text
-
-
 def _normalize_markdown_block_plain_text(text: str) -> str:
     if not text:
         return text
@@ -178,13 +187,22 @@ def _is_allowed_slack_angle_token(token: str) -> bool:
     return any(pattern.match(token) for pattern in ALLOWED_SLACK_ANGLE_TOKEN_PATTERNS)
 
 
+def _find_inline_code_span_end(text: str, start: int) -> int | None:
+    delimiter_end = start
+    while delimiter_end < len(text) and text[delimiter_end] == "`":
+        delimiter_end += 1
+
+    delimiter = text[start:delimiter_end]
+    closing = text.find(delimiter, delimiter_end)
+    if closing == -1:
+        return None
+    return closing + len(delimiter)
+
+
 def normalize_bare_urls_for_slack_markdown(text: str) -> str:
     """Wrap bare URLs in autolink syntax for stable Slack markdown rendering."""
     if not text:
         return text
-
-    markdown_link_pattern = re.compile(r"\[[^\]\n]+\]\([^\)\n]+\)")
-    bare_url_pattern = BARE_URL_PATTERN
 
     def wrap_chunk(chunk: str) -> str:
         parts: List[str] = []
@@ -204,24 +222,20 @@ def normalize_bare_urls_for_slack_markdown(text: str) -> str:
                         continue
 
             if char == "[":
-                link_match = markdown_link_pattern.match(chunk, cursor)
+                link_match = MARKDOWN_LINK_PATTERN.match(chunk, cursor)
                 if link_match:
                     parts.append(link_match.group(0))
                     cursor = link_match.end()
                     continue
 
             if char == "`":
-                delimiter_end = cursor
-                while delimiter_end < length and chunk[delimiter_end] == "`":
-                    delimiter_end += 1
-                delimiter = chunk[cursor:delimiter_end]
-                closing = chunk.find(delimiter, delimiter_end)
-                if closing != -1:
-                    parts.append(chunk[cursor : closing + len(delimiter)])
-                    cursor = closing + len(delimiter)
+                code_span_end = _find_inline_code_span_end(chunk, cursor)
+                if code_span_end is not None:
+                    parts.append(chunk[cursor:code_span_end])
+                    cursor = code_span_end
                     continue
 
-            url_match = bare_url_pattern.match(chunk, cursor)
+            url_match = BARE_URL_PATTERN.match(chunk, cursor)
             if url_match:
                 parts.append(f"<{url_match.group(0)}>")
                 cursor = url_match.end()
@@ -233,9 +247,6 @@ def normalize_bare_urls_for_slack_markdown(text: str) -> str:
         return "".join(parts)
 
     chunks = _split_fenced_code_chunks(text)
-    if not chunks:
-        return wrap_chunk(text)
-
     return "".join(
         chunk if is_fenced else wrap_chunk(chunk) for is_fenced, chunk in chunks
     )
@@ -330,9 +341,6 @@ def normalize_underscore_emphasis(text: str) -> str:
         return text
 
     chunks = _split_fenced_code_chunks(text)
-    if not chunks:
-        return text
-
     return "".join(
         chunk if is_fenced else _normalize_underscore_emphasis_chunk(chunk)
         for is_fenced, chunk in chunks
@@ -354,12 +362,6 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, List[int]]:
         return text, []
 
     boundary_chars = {*VISIBLE_BOUNDARY_CHARS, ZWSP, SYNTH_SPACE_MARKER}
-    inline_code_pattern = re.compile(r"(?<!`)`[^`\n]+`(?!`)", flags=re.DOTALL)
-    emphasis_patterns = [
-        re.compile(r"(?<!\*)\*\*(.+?)\*\*(?!\*)", flags=re.DOTALL),
-        re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", flags=re.DOTALL),
-        re.compile(r"~~(.+?)~~", flags=re.DOTALL),
-    ]
 
     def wrap_match(match: re.Match[str], source: str) -> str:
         start, end = match.start(), match.end()
@@ -384,44 +386,41 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, List[int]]:
         before_char = source[start - 1] if start > 0 else ""
         after_char = source[end] if end < len(source) else ""
         strategy = _nested_code_space_strategy(source, start, end, boundary_chars)
-        resolved_text = match.group(0)
-        for placeholder, replacement in replacements.items():
-            if placeholder in resolved_text:
-                resolved_text = resolved_text.replace(placeholder, replacement["raw"])
+        resolved_text = INLINE_CODE_PLACEHOLDER_PATTERN.sub(
+            lambda placeholder_match: replacements[placeholder_match.group(0)]["raw"],
+            match.group(0),
+        )
         has_ascii_word = bool(re.search(r"[A-Za-z0-9]", resolved_text))
         adjusted_text = match.group(0)
 
         if strategy in {"ja_zh", "ko"}:
-            for placeholder in replacements:
-                search_from = 0
-                while True:
-                    position = adjusted_text.find(placeholder, search_from)
-                    if position == -1:
-                        break
-                    before_inner = adjusted_text[position - 1] if position > 0 else ""
-                    after_position = position + len(placeholder)
-                    after_inner = (
-                        adjusted_text[after_position]
-                        if after_position < len(adjusted_text)
-                        else ""
-                    )
-                    prefix = (
-                        f"{SYNTH_SPACE_MARKER} "
-                        if _needs_inner_code_spacing(before_inner, boundary_chars)
-                        else ""
-                    )
-                    suffix = (
-                        f"{SYNTH_SPACE_MARKER} "
-                        if _needs_inner_code_spacing(after_inner, boundary_chars)
-                        else ""
-                    )
-                    replacement_text = f"{prefix}{placeholder}{suffix}"
-                    adjusted_text = (
-                        adjusted_text[:position]
-                        + replacement_text
-                        + adjusted_text[position + len(placeholder) :]
-                    )
-                    search_from = position + len(replacement_text)
+
+            def add_inner_spacing(placeholder_match: re.Match[str]) -> str:
+                before_inner = (
+                    adjusted_text[placeholder_match.start() - 1]
+                    if placeholder_match.start() > 0
+                    else ""
+                )
+                after_inner = (
+                    adjusted_text[placeholder_match.end()]
+                    if placeholder_match.end() < len(adjusted_text)
+                    else ""
+                )
+                prefix = (
+                    f"{SYNTH_SPACE_MARKER} "
+                    if _needs_inner_code_spacing(before_inner, boundary_chars)
+                    else ""
+                )
+                suffix = (
+                    f"{SYNTH_SPACE_MARKER} "
+                    if _needs_inner_code_spacing(after_inner, boundary_chars)
+                    else ""
+                )
+                return f"{prefix}{placeholder_match.group(0)}{suffix}"
+
+            adjusted_text = INLINE_CODE_PLACEHOLDER_PATTERN.sub(
+                add_inner_spacing, adjusted_text
+            )
 
         if strategy == "ja_zh":
             prefix = (
@@ -459,7 +458,7 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, List[int]]:
         protected_parts: List[str] = []
         last_end = 0
 
-        for idx, match in enumerate(inline_code_pattern.finditer(segment)):
+        for idx, match in enumerate(INLINE_CODE_SPAN_PATTERN.finditer(segment)):
             placeholder = f"\ufff0code{idx}\ufff1"
             protected_parts.append(segment[last_end : match.start()])
             protected_parts.append(placeholder)
@@ -473,32 +472,36 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, List[int]]:
         protected_segment = "".join(protected_parts)
 
         placeholders_inside_emphasis: set[str] = set()
-        for pattern in emphasis_patterns:
+        for pattern in EMPHASIS_PATTERNS:
             for match in pattern.finditer(protected_segment):
-                matched_text = match.group(0)
-                for placeholder in placeholder_map:
-                    if placeholder in matched_text:
-                        placeholders_inside_emphasis.add(placeholder)
+                placeholders_inside_emphasis.update(
+                    placeholder.group(0)
+                    for placeholder in INLINE_CODE_PLACEHOLDER_PATTERN.finditer(
+                        match.group(0)
+                    )
+                )
 
         for placeholder in placeholders_inside_emphasis:
             placeholder_map[placeholder]["wrapped"] = placeholder_map[placeholder][
                 "raw"
             ]
 
-        for pattern in emphasis_patterns:
+        for pattern in EMPHASIS_PATTERNS:
             protected_segment = pattern.sub(
                 lambda m, s=protected_segment: (
                     wrap_nested_code_emphasis_match(m, s, placeholder_map)
-                    if any(placeholder in m.group(0) for placeholder in placeholder_map)
+                    if INLINE_CODE_PLACEHOLDER_PATTERN.search(m.group(0))
                     else wrap_match(m, s)
                 ),
                 protected_segment,
             )
 
-        for placeholder, replacement in placeholder_map.items():
-            protected_segment = protected_segment.replace(
-                placeholder, replacement["wrapped"]
-            )
+        protected_segment = INLINE_CODE_PLACEHOLDER_PATTERN.sub(
+            lambda placeholder_match: placeholder_map[placeholder_match.group(0)][
+                "wrapped"
+            ],
+            protected_segment,
+        )
 
         protected_segment = re.sub(
             f"{ZWSP}{re.escape(SYNTH_SPACE_MARKER)} ",
@@ -522,9 +525,6 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, List[int]]:
         return _remove_synthetic_space_markers(protected_segment)
 
     chunks = _split_fenced_code_chunks(text)
-    if not chunks:
-        return wrap_segment(text)
-
     combined_parts: List[str] = []
     combined_indices: List[int] = []
     offset = 0
@@ -545,11 +545,6 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, List[int]]:
 add_zero_width_spaces = add_zero_width_spaces_to_markdown
 
 
-def _is_strict_markdown_table_line(line: str) -> bool:
-    stripped = line.strip()
-    return bool(stripped) and stripped.startswith("|") and stripped.endswith("|")
-
-
 def _split_markdown_table_cells(line: str) -> List[str]:
     """Split markdown table cells while preserving pipes inside <...|...> links."""
     working = line.strip()
@@ -564,37 +559,43 @@ def _split_markdown_table_cells(line: str) -> List[str]:
     cells: List[str] = []
     current: List[str] = []
     in_angle = False
-    in_inline_code = False
     escaped = False
+    cursor = 0
 
-    for ch in working:
+    while cursor < len(working):
+        ch = working[cursor]
         if escaped:
             current.append(ch)
             escaped = False
+            cursor += 1
             continue
 
         if ch == "\\":
             current.append(ch)
             escaped = True
+            cursor += 1
             continue
 
         if ch == "`":
-            in_inline_code = not in_inline_code
-            current.append(ch)
-            continue
+            code_span_end = _find_inline_code_span_end(working, cursor)
+            if code_span_end is not None:
+                current.append(working[cursor:code_span_end])
+                cursor = code_span_end
+                continue
 
-        if not in_inline_code:
-            if ch == "<":
-                in_angle = True
-            elif ch == ">" and in_angle:
-                in_angle = False
+        if ch == "<":
+            in_angle = True
+        elif ch == ">" and in_angle:
+            in_angle = False
 
-        if ch == "|" and not in_angle and not in_inline_code:
+        if ch == "|" and not in_angle:
             cells.append("".join(current).strip())
             current = []
+            cursor += 1
             continue
 
         current.append(ch)
+        cursor += 1
 
     cells.append("".join(current).strip())
     return cells
@@ -632,14 +633,33 @@ def _split_heading_and_table_row(
     if "|" not in line:
         return None
 
-    in_code = False
+    in_angle = False
+    escaped = False
     first_pipe = -1
-    for i, ch in enumerate(line):
+    cursor = 0
+    while cursor < len(line):
+        ch = line[cursor]
+        if escaped:
+            escaped = False
+            cursor += 1
+            continue
+        if ch == "\\":
+            escaped = True
+            cursor += 1
+            continue
         if ch == "`":
-            in_code = not in_code
-        elif ch == "|" and not in_code:
-            first_pipe = i
+            code_span_end = _find_inline_code_span_end(line, cursor)
+            if code_span_end is not None:
+                cursor = code_span_end
+                continue
+        if ch == "<":
+            in_angle = True
+        elif ch == ">" and in_angle:
+            in_angle = False
+        elif ch == "|" and not in_angle:
+            first_pipe = cursor
             break
+        cursor += 1
 
     if first_pipe < 0:
         return None
@@ -833,8 +853,13 @@ def _create_table_cell(text: str) -> Dict[str, Any]:
             if prefix:
                 elements.append({"type": "text", "text": prefix})
 
-        markdown_label, markdown_url, angle_url, angle_label, token = match.groups()
         element: Dict[str, Any]
+        markdown_label = match.group("markdown_label")
+        markdown_url = match.group("markdown_url")
+        angle_url = match.group("angle_url")
+        angle_label = match.group("angle_label")
+        token = match.group("token") or ""
+
         if markdown_label and markdown_url:
             element = {"type": "link", "url": markdown_url, "text": markdown_label}
         elif angle_url:
@@ -845,10 +870,11 @@ def _create_table_cell(text: str) -> Dict[str, Any]:
             }
         else:
             style: Dict[str, bool] = {}
-            content = token or ""
+            content = token
 
             if content.startswith("`") and content.endswith("`"):
-                content = content[1:-1]
+                delimiter_len = len(match.group("code_delimiter") or "`")
+                content = content[delimiter_len:-delimiter_len]
                 style["code"] = True
             elif content.startswith("~~") and content.endswith("~~"):
                 content = content[2:-2]
@@ -1066,8 +1092,6 @@ def convert_markdown_to_slack_payloads(
     payloads: List[Dict[str, Any]] = []
     for blocks in convert_markdown_to_slack_messages(markdown_text):
         fallback_text = build_fallback_text_from_blocks(blocks).strip()
-        if not fallback_text:
-            fallback_text = blocks_to_plain_text(blocks).strip()
         payloads.append({"blocks": blocks, "text": fallback_text or " "})
     return payloads
 
