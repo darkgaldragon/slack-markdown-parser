@@ -562,6 +562,15 @@ def test_heading_with_inline_code_pipe_is_not_split() -> None:
     assert "Title" in blocks[0].get("text", "")
 
 
+def test_heading_with_multi_backtick_inline_code_pipe_is_not_split() -> None:
+    raw = "# Title ``a|b``\n\nsome text\n"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+    assert len(blocks) == 1
+    assert all(b.get("type") == "markdown" for b in blocks)
+    assert blocks[0]["text"] == raw.strip()
+
+
 def test_code_fence_with_table_like_rows_stays_markdown() -> None:
     raw = """```
 a | b | c
@@ -596,3 +605,14 @@ def test_escaped_pipe_in_table_cell_strips_backslash() -> None:
     table = _first_table(convert_markdown_to_slack_blocks(raw))
     cell_text = extract_plain_text_from_table_cell(table["rows"][1][0])
     assert cell_text == "A | B"
+
+
+def test_multi_backtick_code_span_keeps_pipe_inside_table_cell() -> None:
+    raw = "| A | B |\n|---|---|\n| left | ``x|y`` |\n"
+
+    table = _first_table(convert_markdown_to_slack_blocks(raw))
+    code_cell = table["rows"][1][1]["elements"][0]["elements"][0]
+
+    assert extract_plain_text_from_table_cell(table["rows"][1][1]) == "x|y"
+    assert code_cell["text"] == "x|y"
+    assert code_cell["style"] == {"code": True}
