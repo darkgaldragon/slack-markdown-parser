@@ -6,6 +6,10 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserved raw English-like emphasis when it only touches surrounding punctuation, avoiding unnecessary ZWSP around cases such as `**APIYI (apiyi.com)**:` that Slack already renders correctly on its own.
+
 ## [2.2.4] - 2026-03-11
 
 ### Changed
