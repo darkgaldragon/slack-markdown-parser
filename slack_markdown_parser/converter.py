@@ -199,6 +199,52 @@ def _find_inline_code_span_end(text: str, start: int) -> int | None:
     return closing + len(delimiter)
 
 
+def _is_punctuation_like(char: str, boundary_chars: set[str]) -> bool:
+    return bool(char) and char not in boundary_chars and not char.isalnum()
+
+
+def _should_preserve_raw_punctuation_emphasis(
+    source: str,
+    start: int,
+    end: int,
+    token_text: str,
+    boundary_chars: set[str],
+) -> bool:
+    tight_chars = []
+    before_char = source[start - 1] if start > 0 else ""
+    after_char = source[end] if end < len(source) else ""
+
+    if before_char and before_char not in boundary_chars:
+        tight_chars.append(before_char)
+    if after_char and after_char not in boundary_chars:
+        tight_chars.append(after_char)
+
+    if not tight_chars:
+        return False
+    if any(not _is_punctuation_like(char, boundary_chars) for char in tight_chars):
+        return False
+    if any(_is_han_or_kana_char(char) or _is_hangul_char(char) for char in token_text):
+        return False
+
+    left_idx = start - 1
+    while left_idx >= 0 and source[left_idx] in boundary_chars:
+        left_idx -= 1
+    if left_idx >= 0 and (
+        _is_han_or_kana_char(source[left_idx]) or _is_hangul_char(source[left_idx])
+    ):
+        return False
+
+    right_idx = end
+    while right_idx < len(source) and source[right_idx] in boundary_chars:
+        right_idx += 1
+    if right_idx < len(source) and (
+        _is_han_or_kana_char(source[right_idx]) or _is_hangul_char(source[right_idx])
+    ):
+        return False
+
+    return True
+
+
 def normalize_bare_urls_for_slack_markdown(text: str) -> str:
     """Wrap bare URLs in autolink syntax for stable Slack markdown rendering."""
     if not text:
@@ -368,6 +414,10 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, List[int]]:
         before_safe = start > 0 and source[start - 1] in boundary_chars
         after_safe = end < len(source) and source[end] in boundary_chars
         if before_safe and after_safe:
+            return match.group(0)
+        if _should_preserve_raw_punctuation_emphasis(
+            source, start, end, match.group(0), boundary_chars
+        ):
             return match.group(0)
 
         # When either outer edge is tightly coupled to surrounding text or

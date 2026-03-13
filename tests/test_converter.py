@@ -361,6 +361,20 @@ def test_bold_with_tight_boundary_on_left_is_wrapped_on_both_sides() -> None:
     )
 
 
+def test_english_bold_with_punctuation_on_right_stays_raw() -> None:
+    text = "• **APIYI (apiyi.com)**: OpenAI互換"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert converted == text
+
+
+def test_english_bold_with_japanese_period_stays_raw() -> None:
+    text = "• **APIYI (apiyi.com)**。"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert converted == text
+
+
 def test_blocks_to_plain_text_and_fallback_generation() -> None:
     raw = """# Title
 
