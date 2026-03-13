@@ -30,7 +30,7 @@ If Slack itself does not support a construct in `markdown` blocks, this library 
 - Repair common LLM table issues such as missing outer pipes, missing separator rows, mismatched column counts, and empty cells
 - Split output into multiple Slack messages when needed to satisfy Slack's "one table per message" constraint
 - Sanitize ANSI/control characters and neutralize invalid Slack angle-bracket tokens before block generation
-- Add ZWSP around inline formatting tokens to reduce rendering issues outside fenced code blocks
+- Add ZWSP around inline formatting tokens to reduce rendering issues outside fenced code blocks, while preserving English-like punctuation-only boundaries that Slack already renders reliably
 - Use locale-aware visible-space padding for nested inline-code emphasis in dense Japanese, Chinese, and Korean text when Slack requires stronger boundaries than ZWSP alone
 - Support Markdown and Slack-style links inside table cells
 - Build fallback text for `chat.postMessage.text` from generated blocks, normalizing synthetic ZWSP and any parser-inserted visible-space padding used only for rendering stability
