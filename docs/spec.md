@@ -144,12 +144,16 @@ In languages such as Japanese that do not use spaces between words, formatting m
 
 ### Target patterns
 
-For each formatting token below, if either adjacent side is not a space, tab, newline, or existing ZWSP, or if the token touches the start or end of a line, the whole token is wrapped in ZWSP (`U+200B`) so Slack recognizes it as a standalone formatting boundary:
+For each formatting token below, if either adjacent side is not a space, tab, newline, or existing ZWSP, or if the token touches the start or end of a line, the whole token is normally wrapped in ZWSP (`U+200B`) so Slack recognizes it as a standalone formatting boundary:
 
 - `` `code` ``: inline code
 - `**bold**`: bold
 - `*italic*`: italic
 - `~~strike~~`: strikethrough
+
+Exception:
+
+- If the token body is English-like text and the only tight neighbors are punctuation characters, the raw token is preserved. This avoids over-correcting spans such as `**APIYI (apiyi.com)**:` that Slack already renders correctly without extra ZWSP.
 
 ### Excluded regions
 
