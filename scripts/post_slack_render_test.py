@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import time
+from importlib import metadata
 from pathlib import Path
 from typing import Any
 from urllib import error, parse, request
@@ -15,6 +16,13 @@ from slack_markdown_parser import (
 )
 
 SLACK_API_BASE = "https://slack.com/api"
+
+try:
+    from slack_sdk import WebClient
+    from slack_sdk.errors import SlackApiError
+except ImportError:  # pragma: no cover - optional for local transport comparison
+    WebClient = None
+    SlackApiError = Exception
 
 
 def load_dotenv(path: Path) -> None:
@@ -132,6 +140,50 @@ def build_raw_payload(markdown_text: str) -> list[dict[str, Any]]:
     ]
 
 
+def resolve_slack_sdk_version() -> str:
+    for package_name in ("slack_sdk", "slack-sdk"):
+        try:
+            return metadata.version(package_name)
+        except metadata.PackageNotFoundError:
+            continue
+    return ""
+
+
+def post_message_with_transport(
+    transport: str,
+    token: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    if transport == "raw_http":
+        return slack_api_call("chat.postMessage", token, payload)
+
+    if transport != "slack_sdk":
+        raise RuntimeError(f"Unsupported transport: {transport}")
+
+    if WebClient is None:
+        raise RuntimeError(
+            "slack_sdk is not installed. Install it to use --transport slack_sdk."
+        )
+
+    client = WebClient(token=token)
+    try:
+        response = client.chat_postMessage(
+            channel=payload["channel"],
+            text=payload.get("text", ""),
+            blocks=payload.get("blocks"),
+            thread_ts=payload.get("thread_ts"),
+        )
+        data = getattr(response, "data", None)
+        if isinstance(data, dict):
+            return data
+        return json.loads(str(response))
+    except SlackApiError as exc:
+        error_payload = getattr(exc.response, "data", None)
+        raise RuntimeError(
+            f"Slack SDK error for chat.postMessage: {error_payload or str(exc)}"
+        ) from exc
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Post markdown render-test messages to a Slack channel."
@@ -141,6 +193,12 @@ def parse_args() -> argparse.Namespace:
         choices=("parser", "raw"),
         default="parser",
         help="parser: use slack_markdown_parser, raw: send markdown block as-is.",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=("raw_http", "slack_sdk"),
+        default="raw_http",
+        help="raw_http: urllib JSON POST, slack_sdk: WebClient.chat_postMessage.",
     )
     parser.add_argument("--text", help="Inline markdown text to post.")
     parser.add_argument("--input-file", help="Path to a markdown file to post.")
@@ -203,8 +261,8 @@ def main() -> int:
         raise SystemExit("Missing SLACK_BOT_TOKEN. Set it in the environment or .env.")
 
     for index, payload in enumerate(payloads, start=1):
-        response = slack_api_call(
-            "chat.postMessage",
+        response = post_message_with_transport(
+            args.transport,
             token,
             {
                 "channel": channel,
@@ -226,6 +284,10 @@ def main() -> int:
                     "channel": response_channel,
                     "ts": response_ts,
                     "mode": args.mode,
+                    "transport": args.transport,
+                    "slack_sdk_version": resolve_slack_sdk_version()
+                    if args.transport == "slack_sdk"
+                    else None,
                     "permalink": permalink,
                 },
                 ensure_ascii=False,

@@ -40,6 +40,12 @@ If Slack itself does not support a construct in `markdown` blocks, this library 
 
 The library is built around how Slack actually renders `markdown` and `table` blocks in practice.
 
+Slack updated its `markdown` block docs on March 6, 2026 to describe richer
+constructs such as headers, dividers, tables, and syntax-highlighted code
+blocks, while also noting that the new renderer is still being rolled out.
+Treat those richer constructs as rollout-dependent until you've verified them in
+the exact workspace and posting surface you target.
+
 Reliable in current Slack rendering:
 
 - `**bold**`, `*italic*`, `~~strike~~`, inline code, and fenced code blocks
@@ -49,9 +55,10 @@ Reliable in current Slack rendering:
 
 Known Slack-side limitations:
 
-- Heading syntax (`#`, setext headings) renders as plain text rather than true heading levels
+- Heading syntax (`#`, setext headings) may still collapse to same-size bold/plain text rather than true heading levels, depending on rollout
 - Nested blockquotes are weak compared with full Markdown renderers
 - Horizontal rules render more like line text than semantic separators
+- Raw Markdown tables inside `markdown` blocks are still rollout-dependent; explicit Slack `table` blocks remain the reliable path
 - Markdown image syntax does not become an embedded image in `markdown` blocks
 - Math, raw HTML, HTML comments, `<details>`, admonition syntax, and Mermaid are rendered as plain text or code, not as rich features
 

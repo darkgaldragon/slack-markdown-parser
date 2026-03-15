@@ -3,6 +3,14 @@
 This repository includes a minimal local workflow for validating how Slack
 actually renders generated Block Kit `markdown` and `table` output.
 
+## Rollout note
+
+Slack published richer `markdown` block docs on March 6, 2026, but the docs
+also say that the new renderer is still being rolled out. Do not assume that
+headers, dividers, native Markdown tables, or syntax-highlighted code blocks
+will render identically across all workspaces or posting surfaces. Re-run the
+raw vs parser comparison in the workspace you care about.
+
 ## Files
 
 - `docs/slack-render-test-app-manifest.yaml`

@@ -6,6 +6,11 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 ## [Unreleased]
 
+### Changed
+
+- Documented Slack's March 6, 2026 richer `markdown` block rollout as rollout-dependent in the README and behavior specs, so headers and raw Markdown tables are no longer described as universally stable.
+- Extended `scripts/post_slack_render_test.py` with `--transport raw_http|slack_sdk` to compare Web API posting paths while keeping the same markdown payload generation.
+
 ## [2.2.5] - 2026-03-14
 
 ### Fixed
