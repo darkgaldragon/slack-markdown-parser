@@ -1,7 +1,10 @@
-# Slack Render Test Workflow
+# Maintainer Slack Render Test Workflow
 
 This repository includes a minimal local workflow for validating how Slack
 actually renders generated Block Kit `markdown` and `table` output.
+
+This document is maintainer-facing QA guidance. It is not part of the public
+package API or behavior contract.
 
 ## Rollout note
 

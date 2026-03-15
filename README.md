@@ -182,12 +182,19 @@ These are also part of the public package surface:
 
 - Behavior spec: [docs/spec.md](docs/spec.md)
 - Japanese behavior spec: [docs/spec-ja.md](docs/spec-ja.md)
-- Slack render-test workflow: [docs/slack-render-test-workflow.md](docs/slack-render-test-workflow.md)
-- Nested-modifier findings: [docs/slack-nested-modifier-findings.md](docs/slack-nested-modifier-findings.md)
-- Desktop/mobile manual checklist: [docs/slack-client-manual-checklist.md](docs/slack-client-manual-checklist.md)
 - Non-goals:
   - Generating Slack `mrkdwn` strings
   - Supporting clients or MCP tools that can only send `mrkdwn`
+
+## Maintainer QA docs
+
+These documents are for maintainers and contributors who validate Slack's
+renderer behavior in a real workspace. They are not part of the end-user API or
+package contract.
+
+- Slack render-test workflow: [docs/slack-render-test-workflow.md](docs/slack-render-test-workflow.md)
+- Nested-modifier findings: [docs/slack-nested-modifier-findings.md](docs/slack-nested-modifier-findings.md)
+- Desktop/mobile manual checklist: [docs/slack-client-manual-checklist.md](docs/slack-client-manual-checklist.md)
 
 ## Contributing
 

@@ -166,12 +166,18 @@ QA | ~~保留~~ | Team C
 
 - 挙動仕様: [docs/spec-ja.md](docs/spec-ja.md)
 - 英語仕様: [docs/spec.md](docs/spec.md)
-- Slack 実レンダリング検証手順: [docs/slack-render-test-workflow.md](docs/slack-render-test-workflow.md)
-- nested modifier 実測メモ: [docs/slack-nested-modifier-findings.md](docs/slack-nested-modifier-findings.md)
-- Desktop / mobile 手動確認: [docs/slack-client-manual-checklist.md](docs/slack-client-manual-checklist.md)
 - 非対応:
   - `mrkdwn` 文字列の生成
   - `mrkdwn` のみ送信可能なクライアント／MCP ツール
+
+## メンテナ向け検証ドキュメント
+
+以下は、実際の Slack workspace 上で renderer 挙動を検証するための
+メンテナ / コントリビュータ向け資料です。利用者向け API や公開仕様の一部ではありません。
+
+- Slack 実レンダリング検証手順: [docs/slack-render-test-workflow.md](docs/slack-render-test-workflow.md)
+- nested modifier 実測メモ: [docs/slack-nested-modifier-findings.md](docs/slack-nested-modifier-findings.md)
+- Desktop / mobile 手動確認: [docs/slack-client-manual-checklist.md](docs/slack-client-manual-checklist.md)
 
 ## コントリビュート
 
