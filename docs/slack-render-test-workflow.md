@@ -1,7 +1,18 @@
-# Slack Render Test Workflow
+# Maintainer Slack Render Test Workflow
 
 This repository includes a minimal local workflow for validating how Slack
 actually renders generated Block Kit `markdown` and `table` output.
+
+This document is maintainer-facing QA guidance. It is not part of the public
+package API or behavior contract.
+
+## Rollout note
+
+Slack published richer `markdown` block docs on March 6, 2026, but the docs
+also say that the new renderer is still being rolled out. Do not assume that
+headers, dividers, native Markdown tables, or syntax-highlighted code blocks
+will render identically across all workspaces or posting surfaces. Re-run the
+raw vs parser comparison in the workspace you care about.
 
 ## Files
 
@@ -46,6 +57,20 @@ Post using `slack_markdown_parser`:
 ```bash
 python scripts/post_slack_render_test.py \
   --mode parser \
+  --text 'from **bold**.'
+```
+
+Compare the same payload over raw HTTP vs the Slack SDK transport:
+
+```bash
+python scripts/post_slack_render_test.py \
+  --mode parser \
+  --transport raw_http \
+  --text 'from **bold**.'
+
+python scripts/post_slack_render_test.py \
+  --mode parser \
+  --transport slack_sdk \
   --text 'from **bold**.'
 ```
 
@@ -94,22 +119,27 @@ Each posted message prints JSON like:
   "channel": "CXXXXXXXX",
   "ts": "1773051865.764719",
   "mode": "parser",
+  "transport": "slack_sdk",
+  "slack_sdk_version": "3.41.0",
   "permalink": "https://your-workspace.slack.com/archives/CXXXXXXXX/p1234567890123456"
 }
 ```
 
 Use the `permalink` to open the exact message in Slack and verify rendering in the
-web UI or via Playwright.
+web UI or via Playwright. `slack_sdk_version` is `null` when the script posts via
+`--transport raw_http`.
 
 ## Recommended comparison flow
 
 1. Post the same markdown once with `--mode raw`.
-2. Post the same markdown once with `--mode parser`.
-3. Open both permalinks in Slack.
-4. Compare visible rendering, especially for:
+2. Post the same markdown once with `--mode parser --transport raw_http`.
+3. Post the same markdown once with `--mode parser --transport slack_sdk`.
+4. Open the permalinks in Slack.
+5. Compare visible rendering, especially for:
    - bold/italic/strike recognition
    - punctuation boundaries
    - Japanese vs English surrounding text
+   - transport-specific differences, if any
    - fallback text behavior when relevant
 
 For desktop/mobile spot checks, use:

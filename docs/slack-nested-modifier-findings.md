@@ -1,6 +1,9 @@
-# Slack Nested Modifier Findings
+# Maintainer Slack Nested Modifier Findings
 
-Observed on Slack Web against `#bot-test` on 2026-03-09.
+Observed on Slack Web in a dedicated maintainer test channel on 2026-03-09.
+
+This note captures maintainer validation results. It is not part of the public
+package API or guaranteed behavior by itself.
 
 ## Variants
 

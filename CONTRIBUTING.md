@@ -28,11 +28,25 @@ python -m build
 
 If you are changing Markdown parsing behavior, please add or update automated tests in `tests/`.
 
+## Maintainer QA docs
+
+The following documents are maintainer-facing QA references for validating real
+Slack renderer behavior. They are not part of the public package contract and
+are intentionally linked from CONTRIBUTING rather than from the main README.
+
+If your change depends on Slack's own renderer behavior, review these docs as
+needed:
+
+- `docs/slack-render-test-workflow.md`
+- `docs/slack-client-manual-checklist.md`
+- `docs/slack-nested-modifier-findings.md`
+
 ## Pull requests
 
 - Keep changes focused and explain the user-facing impact.
 - Add or update tests when parser behavior changes.
 - Update `README.md`, `README-ja.md`, or `docs/spec*.md` when public behavior or examples change.
+- Keep maintainer-only QA docs consistent with the public docs when renderer assumptions change.
 - Conventional Commits are encouraged for commit messages, but not required for contributors.
 - Make sure CI passes before requesting review.
 

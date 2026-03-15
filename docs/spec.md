@@ -48,11 +48,18 @@ The following behaviors are based on practical validation against real Slack cli
 - Bullet lists, ordered lists, task lists, and simple one-level blockquotes
 - Slack `table` blocks
 
+Slack's published `markdown` block support changed on March 6, 2026, but the
+docs also say that the richer renderer is still being rolled out. For that
+reason, behaviors such as true heading levels or native Markdown tables in raw
+`markdown` blocks should be treated as surface- and workspace-dependent until
+verified in your own environment.
+
 ### Behaviors limited by Slack itself
 
-- ATX headings (`#`, `##`, `###`) and setext headings render as plain text rather than true heading levels
+- ATX headings (`#`, `##`, `###`) and setext headings may still collapse to same-size bold/plain text rather than true heading levels, depending on rollout
 - Nested blockquotes are weaker than in full Markdown renderers
 - Horizontal rules render more like visible line text than semantic separators
+- Native Markdown table rendering inside raw `markdown` blocks remains rollout-dependent; explicit Slack `table` blocks are the reliable option
 - Markdown image syntax does not become an embedded image inside `markdown` blocks
 - Math, raw HTML, HTML comments, `<details>`, admonition syntax, and Mermaid do not receive special rich rendering
 

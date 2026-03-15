@@ -1,6 +1,9 @@
-# Slack Client Manual Checklist
+# Maintainer Slack Client Manual Checklist
 
 Use this for quick smoke checks in Slack Desktop and mobile after parser changes.
+
+This checklist is for maintainers and contributors validating real Slack client
+rendering. It is not end-user documentation.
 
 ## How to run
 
