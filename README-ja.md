@@ -170,19 +170,10 @@ QA | ~~保留~~ | Team C
   - `mrkdwn` 文字列の生成
   - `mrkdwn` のみ送信可能なクライアント／MCP ツール
 
-## メンテナ向け検証ドキュメント
-
-以下は、実際の Slack workspace 上で renderer 挙動を検証するための
-メンテナ / コントリビュータ向け資料です。利用者向け API や公開仕様の一部ではありません。
-
-- Slack 実レンダリング検証手順: [docs/slack-render-test-workflow.md](docs/slack-render-test-workflow.md)
-- nested modifier 実測メモ: [docs/slack-nested-modifier-findings.md](docs/slack-nested-modifier-findings.md)
-- Desktop / mobile 手動確認: [docs/slack-client-manual-checklist.md](docs/slack-client-manual-checklist.md)
-
 ## コントリビュート
 
 不具合報告、ドキュメント改善、コードの提案を歓迎します。
-Issue / Pull Request を作成する前に [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。
+Issue / Pull Request を作成する前に [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。Slack renderer のメンテナ向け検証資料も、利用者向け README ではなく CONTRIBUTING 側から案内しています。
 
 ## 変更履歴
 

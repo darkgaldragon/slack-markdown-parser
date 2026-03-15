@@ -186,20 +186,10 @@ These are also part of the public package surface:
   - Generating Slack `mrkdwn` strings
   - Supporting clients or MCP tools that can only send `mrkdwn`
 
-## Maintainer QA docs
-
-These documents are for maintainers and contributors who validate Slack's
-renderer behavior in a real workspace. They are not part of the end-user API or
-package contract.
-
-- Slack render-test workflow: [docs/slack-render-test-workflow.md](docs/slack-render-test-workflow.md)
-- Nested-modifier findings: [docs/slack-nested-modifier-findings.md](docs/slack-nested-modifier-findings.md)
-- Desktop/mobile manual checklist: [docs/slack-client-manual-checklist.md](docs/slack-client-manual-checklist.md)
-
 ## Contributing
 
 Contributions, bug reports, and documentation improvements are welcome.
-Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request. Maintainer-facing Slack renderer QA notes are linked from there rather than treated as part of the end-user package docs.
 
 ## Changelog
 
