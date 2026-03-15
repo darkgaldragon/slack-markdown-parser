@@ -140,13 +140,13 @@ def build_raw_payload(markdown_text: str) -> list[dict[str, Any]]:
     ]
 
 
-def resolve_slack_sdk_version() -> str:
+def resolve_slack_sdk_version() -> str | None:
     for package_name in ("slack_sdk", "slack-sdk"):
         try:
             return metadata.version(package_name)
         except metadata.PackageNotFoundError:
             continue
-    return ""
+    return None
 
 
 def post_message_with_transport(
@@ -260,6 +260,10 @@ def main() -> int:
     if not token:
         raise SystemExit("Missing SLACK_BOT_TOKEN. Set it in the environment or .env.")
 
+    slack_sdk_version = (
+        resolve_slack_sdk_version() if args.transport == "slack_sdk" else None
+    )
+
     for index, payload in enumerate(payloads, start=1):
         response = post_message_with_transport(
             args.transport,
@@ -285,9 +289,7 @@ def main() -> int:
                     "ts": response_ts,
                     "mode": args.mode,
                     "transport": args.transport,
-                    "slack_sdk_version": resolve_slack_sdk_version()
-                    if args.transport == "slack_sdk"
-                    else None,
+                    "slack_sdk_version": slack_sdk_version,
                     "permalink": permalink,
                 },
                 ensure_ascii=False,

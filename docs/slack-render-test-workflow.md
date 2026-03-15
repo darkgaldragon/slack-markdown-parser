@@ -60,6 +60,20 @@ python scripts/post_slack_render_test.py \
   --text 'from **bold**.'
 ```
 
+Compare the same payload over raw HTTP vs the Slack SDK transport:
+
+```bash
+python scripts/post_slack_render_test.py \
+  --mode parser \
+  --transport raw_http \
+  --text 'from **bold**.'
+
+python scripts/post_slack_render_test.py \
+  --mode parser \
+  --transport slack_sdk \
+  --text 'from **bold**.'
+```
+
 Preview generated payloads without calling Slack:
 
 ```bash
@@ -105,22 +119,27 @@ Each posted message prints JSON like:
   "channel": "CXXXXXXXX",
   "ts": "1773051865.764719",
   "mode": "parser",
+  "transport": "slack_sdk",
+  "slack_sdk_version": "3.41.0",
   "permalink": "https://your-workspace.slack.com/archives/CXXXXXXXX/p1234567890123456"
 }
 ```
 
 Use the `permalink` to open the exact message in Slack and verify rendering in the
-web UI or via Playwright.
+web UI or via Playwright. `slack_sdk_version` is `null` when the script posts via
+`--transport raw_http`.
 
 ## Recommended comparison flow
 
 1. Post the same markdown once with `--mode raw`.
-2. Post the same markdown once with `--mode parser`.
-3. Open both permalinks in Slack.
-4. Compare visible rendering, especially for:
+2. Post the same markdown once with `--mode parser --transport raw_http`.
+3. Post the same markdown once with `--mode parser --transport slack_sdk`.
+4. Open the permalinks in Slack.
+5. Compare visible rendering, especially for:
    - bold/italic/strike recognition
    - punctuation boundaries
    - Japanese vs English surrounding text
+   - transport-specific differences, if any
    - fallback text behavior when relevant
 
 For desktop/mobile spot checks, use:
