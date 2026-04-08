@@ -26,11 +26,13 @@ Processing order in `convert_markdown_to_slack_blocks`:
 1. HTML entity decode: restore entities such as `&gt;` and `&amp;`
 2. Slack text sanitize: remove ANSI/control noise and neutralize invalid Slack angle-bracket tokens
 3. Underscore emphasis normalization: convert `_..._` / `__...__` into Slack-compatible `*...*` / `**...**`
-4. Table normalization: repair malformed table syntax according to the rules below
-5. Segment split: divide the text into table regions (consecutive lines containing `|`) and non-table regions
-6. Block generation:
+4. Bare URL normalization: wrap bare URLs into Slack-friendly autolink form before delivery
+5. Table normalization: repair malformed table syntax according to the rules below
+6. Segment split: divide the text into table regions (consecutive lines containing `|`) and non-table regions
+7. Block generation:
    - Table regions: parse inline cell styling and generate a `table` block. If conversion fails, such as when there are fewer than two candidate lines or the parse result is empty, fall back to a `markdown` block.
    - Non-table regions: add ZWSP where needed and generate a `markdown` block
+   - If `preserve_visual_blank_lines=True`, replace internal blank lines in non-table regions with synthetic NBSP-only spacer lines before emitting the `markdown` block
 
 `convert_markdown_to_slack_messages` then splits the resulting block list to satisfy the "one table per message" constraint.
 `convert_markdown_to_slack_payloads` returns the same split blocks plus fallback `text` values ready for `chat.postMessage`.
@@ -48,18 +50,25 @@ The following behaviors are based on practical validation against real Slack cli
 - Bullet lists, ordered lists, task lists, and simple one-level blockquotes
 - Slack `table` blocks
 
-Slack's published `markdown` block support changed on March 6, 2026, but the
-docs also say that the richer renderer is still being rolled out. For that
-reason, behaviors such as true heading levels or native Markdown tables in raw
-`markdown` blocks should be treated as surface- and workspace-dependent until
-verified in your own environment.
+Slack published richer `markdown` block documentation and a rollout changelog
+entry on March 6, 2026. In the Slack Web workspace validated for this project
+on April 8, 2026, raw `markdown` blocks rendered:
+
+- native header blocks for ATX and setext headings
+- native divider blocks for `---`
+- task lists
+- native raw Markdown tables
+
+Slack still owns the exact rollout and visual styling, so these richer raw
+Markdown behaviors should still be treated as surface- and workspace-dependent
+until verified in your own environment.
 
 ### Behaviors limited by Slack itself
 
-- ATX headings (`#`, `##`, `###`) and setext headings may still collapse to same-size bold/plain text rather than true heading levels, depending on rollout
+- Exact heading sizing and the availability of richer raw Markdown constructs remain client- and rollout-dependent, even though the tested Slack Web surface rendered distinct heading levels through `###`
+- Paragraph breaks inside `markdown` blocks currently receive little or no extra vertical spacing in tested Slack Web surfaces, so blank lines can look visually collapsed
 - Nested blockquotes are weaker than in full Markdown renderers
-- Horizontal rules render more like visible line text than semantic separators
-- Native Markdown table rendering inside raw `markdown` blocks remains rollout-dependent; explicit Slack `table` blocks are the reliable option
+- Native Markdown table rendering inside raw `markdown` blocks now works on newer richer-rollout surfaces, but explicit Slack `table` blocks remain the reliable option
 - Markdown image syntax does not become an embedded image inside `markdown` blocks
 - Math, raw HTML, HTML comments, `<details>`, admonition syntax, and Mermaid do not receive special rich rendering
 
@@ -69,6 +78,7 @@ verified in your own environment.
 - Bare URLs are wrapped into Slack-friendly autolink form (`<https://...>`) before `markdown` block delivery
 - Malformed Markdown tables are repaired before `table` block generation
 - Table-like rows inside fenced code blocks are kept out of table parsing
+- Internal blank lines can optionally be rewritten into synthetic NBSP-only spacer lines so Slack preserves visible paragraph separation
 - Unsupported Slack angle-bracket tokens such as `<foo>` or raw HTML-like tags are neutralized
 
 ## Slack text sanitize rules
@@ -188,6 +198,19 @@ Exception:
 |---|---|---|
 | `U+200C` | ZWNJ (zero-width non-joiner) | Used for word-shape control in languages such as Persian and Hindi |
 | `U+200D` | ZWJ (zero-width joiner) | Required for joined emoji and other grapheme composition |
+
+## Optional blank-line visibility workaround
+
+When `preserve_visual_blank_lines=True` is passed to the main conversion APIs,
+the parser rewrites internal blank-only lines in non-table Markdown segments
+into synthetic NBSP-only lines before emitting Slack `markdown` blocks.
+
+This workaround is intentionally narrow:
+
+- Only blank lines between visible lines are rewritten
+- Leading and trailing blank runs are left untouched
+- Table segments are not modified by this option
+- Fallback text and `blocks_to_plain_text` remove the synthetic NBSP markers again, preserving the original blank lines in plain-text output
 
 ## Fallback text
 

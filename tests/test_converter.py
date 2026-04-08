@@ -113,6 +113,49 @@ middle text
         assert sum(1 for b in message_blocks if b.get("type") == "table") <= 1
 
 
+def test_preserve_visual_blank_lines_injects_nbsp_lines_in_markdown_blocks() -> None:
+    blocks = convert_markdown_to_slack_blocks(
+        "alpha\n\nbeta", preserve_visual_blank_lines=True
+    )
+
+    assert blocks[0]["type"] == "markdown"
+    assert blocks[0]["text"] == "alpha\n\u00a0\nbeta"
+
+
+def test_preserve_visual_blank_lines_keeps_fallback_text_unchanged() -> None:
+    payload = convert_markdown_to_slack_payloads(
+        "alpha\n\nbeta", preserve_visual_blank_lines=True
+    )[0]
+
+    assert payload["blocks"][0]["text"] == "alpha\n\u00a0\nbeta"
+    assert payload["text"] == "alpha\n\nbeta"
+
+
+def test_preserve_visual_blank_lines_keeps_multiple_blank_lines() -> None:
+    blocks = convert_markdown_to_slack_blocks(
+        "alpha\n\n\nbeta", preserve_visual_blank_lines=True
+    )
+
+    assert blocks[0]["text"] == "alpha\n\u00a0\n\u00a0\nbeta"
+    assert build_fallback_text_from_blocks(blocks) == "alpha\n\n\nbeta"
+
+
+def test_preserve_visual_blank_lines_skips_table_blocks() -> None:
+    raw = """intro
+
+| A | B |
+|---|---|
+| 1 | 2 |
+"""
+
+    blocks = convert_markdown_to_slack_blocks(raw, preserve_visual_blank_lines=True)
+
+    assert blocks[0]["type"] == "markdown"
+    assert blocks[0]["text"].strip() == "intro"
+    assert "\u00a0" not in blocks[0]["text"]
+    assert blocks[1]["type"] == "table"
+
+
 def test_zero_width_space_not_inserted_inside_code_fence() -> None:
     text = "```\n**not bold**\n```\noutside **bold**"
     converted = add_zero_width_spaces_to_markdown(text)

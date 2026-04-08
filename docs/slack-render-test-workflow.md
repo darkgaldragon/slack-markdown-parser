@@ -8,11 +8,20 @@ package API or behavior contract.
 
 ## Rollout note
 
-Slack published richer `markdown` block docs on March 6, 2026, but the docs
-also say that the new renderer is still being rolled out. Do not assume that
-headers, dividers, native Markdown tables, or syntax-highlighted code blocks
-will render identically across all workspaces or posting surfaces. Re-run the
-raw vs parser comparison in the workspace you care about.
+Slack published richer `markdown` block docs and a rollout changelog on March
+6, 2026:
+
+- [https://docs.slack.dev/reference/block-kit/blocks/markdown-block/](https://docs.slack.dev/reference/block-kit/blocks/markdown-block/)
+- [https://docs.slack.dev/changelog/2026/03/06/block-kit-rich-text](https://docs.slack.dev/changelog/2026/03/06/block-kit-rich-text)
+
+Those docs also say that the new renderer is still being rolled out. Do not
+assume that headers, dividers, native Markdown tables, or syntax-highlighted
+code blocks will render identically across all workspaces or posting surfaces.
+Re-run the raw vs parser comparison in the workspace you care about.
+
+Recent baseline observations for Slack Web are summarized in:
+
+- `docs/slack-markdown-rollout-observations.md`
 
 ## Files
 
@@ -139,6 +148,8 @@ web UI or via Playwright. `slack_sdk_version` is `null` when the script posts vi
    - bold/italic/strike recognition
    - punctuation boundaries
    - Japanese vs English surrounding text
+   - header/divider/task-list/raw-table rollout behavior
+   - paragraph spacing and blank-line visibility
    - transport-specific differences, if any
    - fallback text behavior when relevant
 

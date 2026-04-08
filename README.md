@@ -33,6 +33,7 @@ If Slack itself does not support a construct in `markdown` blocks, this library 
 - Add ZWSP around inline formatting tokens to reduce rendering issues outside fenced code blocks, while preserving English-like punctuation-only boundaries that Slack already renders reliably
 - Use locale-aware visible-space padding for nested inline-code emphasis in dense Japanese, Chinese, and Korean text when Slack requires stronger boundaries than ZWSP alone
 - Support Markdown and Slack-style links inside table cells
+- Optionally preserve visible blank lines inside Slack `markdown` blocks by inserting synthetic spacer lines while keeping fallback `text` unchanged
 - Build fallback text for `chat.postMessage.text` from generated blocks, normalizing synthetic ZWSP and any parser-inserted visible-space padding used only for rendering stability
 - Accept raw LLM Markdown without tightly constraining the model prompt, using best-effort sanitize and table repair before Slack delivery
 
@@ -40,11 +41,17 @@ If Slack itself does not support a construct in `markdown` blocks, this library 
 
 The library is built around how Slack actually renders `markdown` and `table` blocks in practice.
 
-Slack updated its `markdown` block docs on March 6, 2026 to describe richer
-constructs such as headers, dividers, tables, and syntax-highlighted code
-blocks, while also noting that the new renderer is still being rolled out.
-Treat those richer constructs as rollout-dependent until you've verified them in
-the exact workspace and posting surface you target.
+Slack updated its [`markdown` block docs](https://docs.slack.dev/reference/block-kit/blocks/markdown-block/)
+and [rollout changelog](https://docs.slack.dev/changelog/2026/03/06/block-kit-rich-text)
+on March 6, 2026 to describe a richer renderer that can support headers,
+dividers, task lists, native Markdown tables, and syntax-highlighted code
+blocks. In the Slack Web workspace used for this project's April 8, 2026
+validation, raw `markdown` blocks rendered those richer constructs natively,
+including distinct heading levels for `#`, `##`, `###`, and setext headings.
+
+Slack still controls the exact rollout and styling. Treat richer raw Markdown
+constructs as Slack-owned behavior that can vary by workspace, client, and
+posting surface until you verify them in your target environment.
 
 Reliable in current Slack rendering:
 
@@ -52,13 +59,14 @@ Reliable in current Slack rendering:
 - Bare URLs, autolinks, Markdown links, reference-style links, and mailto links
 - Bullet lists, ordered lists, task lists, and simple blockquotes
 - Explicit Slack `table` blocks generated from Markdown tables
+- On richer rollout surfaces, raw Markdown headings, dividers, and tables inside `markdown` blocks
 
 Known Slack-side limitations:
 
-- Heading syntax (`#`, setext headings) may still collapse to same-size bold/plain text rather than true heading levels, depending on rollout
+- Exact heading sizing and availability remain rollout- and client-dependent, even though richer heading levels were observed on Slack Web in this project's April 2026 validation
+- Paragraph breaks inside `markdown` blocks currently receive little or no extra vertical spacing in tested Slack Web surfaces, so blank lines can look visually collapsed
 - Nested blockquotes are weak compared with full Markdown renderers
-- Horizontal rules render more like line text than semantic separators
-- Raw Markdown tables inside `markdown` blocks are still rollout-dependent; explicit Slack `table` blocks remain the reliable path
+- Raw Markdown tables inside `markdown` blocks now render on newer richer-rollout surfaces, but explicit Slack `table` blocks remain the reliable path across workspaces and delivery constraints
 - Markdown image syntax does not become an embedded image in `markdown` blocks
 - Math, raw HTML, HTML comments, `<details>`, admonition syntax, and Mermaid are rendered as plain text or code, not as rich features
 
@@ -68,6 +76,7 @@ What this library compensates for:
 - Wraps bare URLs into Slack-friendly autolink form before sending `markdown` blocks
 - Repairs malformed LLM-generated tables before converting them into Slack `table` blocks
 - Keeps table-like rows inside fenced code blocks out of table normalization
+- Optionally turns internal blank lines into synthetic spacer lines so paragraphs stay visually separated in Slack `markdown` blocks
 - Neutralizes invalid Slack angle-bracket tokens such as raw HTML-like tags
 
 ## Requirements
@@ -97,11 +106,16 @@ markdown = """
 | UI | *In progress* |
 """
 
-for payload in convert_markdown_to_slack_payloads(markdown):
+for payload in convert_markdown_to_slack_payloads(
+    markdown,
+    preserve_visual_blank_lines=True,
+):
     print(payload)
 ```
 
 `convert_markdown_to_slack_messages` automatically splits output into multiple messages when the input contains multiple tables.
+Set `preserve_visual_blank_lines=True` when you want the parser to compensate
+for Slack's currently tight paragraph spacing inside `markdown` blocks.
 
 ## Rendering example
 
@@ -150,11 +164,16 @@ Example Slack bot rendering (`markdown` + `table` blocks):
 
 | Function | Description |
 |---|---|
-| `convert_markdown_to_slack_messages(markdown_text) -> list[list[dict]]` | Convert Markdown into Slack messages already split around table blocks. |
-| `convert_markdown_to_slack_payloads(markdown_text) -> list[dict]` | Convert Markdown into Slack-ready payloads with both `blocks` and fallback `text`. |
-| `convert_markdown_to_slack_blocks(markdown_text) -> list[dict]` | Convert Markdown into a flat Block Kit block list. |
+| `convert_markdown_to_slack_messages(markdown_text, *, preserve_visual_blank_lines=False) -> list[list[dict]]` | Convert Markdown into Slack messages already split around table blocks. |
+| `convert_markdown_to_slack_payloads(markdown_text, *, preserve_visual_blank_lines=False) -> list[dict]` | Convert Markdown into Slack-ready payloads with both `blocks` and fallback `text`. |
+| `convert_markdown_to_slack_blocks(markdown_text, *, preserve_visual_blank_lines=False) -> list[dict]` | Convert Markdown into a flat Block Kit block list. |
 | `build_fallback_text_from_blocks(blocks) -> str` | Build fallback text suitable for `chat.postMessage.text`. |
 | `blocks_to_plain_text(blocks) -> str` | Convert blocks into plain text. |
+
+`preserve_visual_blank_lines=True` replaces internal blank lines in non-table
+Markdown segments with synthetic NBSP-only spacer lines. Those placeholders are
+removed again when generating fallback plain text, so Slack notifications and
+logs stay close to the original Markdown source.
 
 ### Utility functions
 

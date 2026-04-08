@@ -40,6 +40,7 @@ needed:
 - `docs/slack-render-test-workflow.md`
 - `docs/slack-client-manual-checklist.md`
 - `docs/slack-nested-modifier-findings.md`
+- `docs/slack-markdown-rollout-observations.md`
 
 ## Pull requests
 

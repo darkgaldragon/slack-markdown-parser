@@ -11,6 +11,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 ZWSP = "\u200b"
+NBSP = "\u00a0"
 VISIBLE_BOUNDARY_CHARS = {" ", "\t", "\n", "\r"}
 SYNTH_SPACE_MARKER = "\u2063"
 STRIP_LEFT_ZWSP_MARKER = "\ufff2"
@@ -159,6 +160,63 @@ def _strip_synthetic_spaces_from_plain_text(
     indices = set(synthetic_space_indices)
     return "".join(
         char for idx, char in enumerate(text) if not (idx in indices and char == " ")
+    )
+
+
+def _inject_visual_blank_line_placeholders(text: str) -> tuple[str, List[int]]:
+    """Replace internal blank lines with NBSP-only lines for Slack rendering."""
+    if not text or "\n" not in text:
+        return text, []
+
+    lines = text.split("\n")
+    rewritten: List[tuple[str, bool]] = []
+    i = 0
+
+    while i < len(lines):
+        if lines[i].strip(" \t\r"):
+            rewritten.append((lines[i], False))
+            i += 1
+            continue
+
+        blank_start = i
+        while i < len(lines) and not lines[i].strip(" \t\r"):
+            i += 1
+
+        has_visible_line_before = blank_start > 0 and bool(
+            lines[blank_start - 1].strip(" \t\r")
+        )
+        has_visible_line_after = i < len(lines) and bool(lines[i].strip(" \t\r"))
+
+        if has_visible_line_before and has_visible_line_after:
+            rewritten.extend((NBSP, True) for _ in range(i - blank_start))
+        else:
+            rewritten.extend((line, False) for line in lines[blank_start:i])
+
+    rebuilt_parts: List[str] = []
+    synthetic_indices: List[int] = []
+    offset = 0
+
+    for idx, (line, is_synthetic) in enumerate(rewritten):
+        if idx > 0:
+            rebuilt_parts.append("\n")
+            offset += 1
+        if is_synthetic:
+            synthetic_indices.append(offset)
+        rebuilt_parts.append(line)
+        offset += len(line)
+
+    return "".join(rebuilt_parts), synthetic_indices
+
+
+def _strip_synthetic_blank_line_placeholders(
+    text: str, synthetic_blank_line_indices: Optional[List[int]] = None
+) -> str:
+    if not text or not synthetic_blank_line_indices:
+        return text
+
+    indices = set(synthetic_blank_line_indices)
+    return "".join(
+        char for idx, char in enumerate(text) if not (idx in indices and char == NBSP)
     )
 
 
@@ -1069,7 +1127,9 @@ def split_markdown_into_segments(markdown_text: str) -> List[Dict[str, str]]:
     return segments
 
 
-def convert_markdown_to_slack_blocks(markdown_text: str) -> List[Dict[str, Any]]:
+def convert_markdown_to_slack_blocks(
+    markdown_text: str, *, preserve_visual_blank_lines: bool = False
+) -> List[Dict[str, Any]]:
     """Convert markdown text into Slack markdown/table blocks."""
     if not markdown_text:
         return []
@@ -1093,9 +1153,15 @@ def convert_markdown_to_slack_blocks(markdown_text: str) -> List[Dict[str, Any]]
                 continue
 
         formatted, synthetic_indices = _format_markdown_with_spacing_metadata(content)
+        synthetic_blank_line_indices: List[int] = []
+        if preserve_visual_blank_lines:
+            formatted, synthetic_blank_line_indices = (
+                _inject_visual_blank_line_placeholders(formatted)
+            )
         if formatted.strip():
             block = _AnnotatedSlackBlock({"type": "markdown", "text": formatted})
             block._synthetic_space_indices = synthetic_indices
+            block._synthetic_blank_line_indices = synthetic_blank_line_indices
             blocks.append(block)
 
     return blocks
@@ -1127,9 +1193,13 @@ def split_blocks_by_table(blocks: List[Dict[str, Any]]) -> List[List[Dict[str, A
 
 def convert_markdown_to_slack_messages(
     markdown_text: str,
+    *,
+    preserve_visual_blank_lines: bool = False,
 ) -> List[List[Dict[str, Any]]]:
     """Convert markdown text into a list of Slack message block groups."""
-    blocks = convert_markdown_to_slack_blocks(markdown_text)
+    blocks = convert_markdown_to_slack_blocks(
+        markdown_text, preserve_visual_blank_lines=preserve_visual_blank_lines
+    )
     if not blocks:
         return []
     return split_blocks_by_table(blocks)
@@ -1137,10 +1207,14 @@ def convert_markdown_to_slack_messages(
 
 def convert_markdown_to_slack_payloads(
     markdown_text: str,
+    *,
+    preserve_visual_blank_lines: bool = False,
 ) -> List[Dict[str, Any]]:
     """Convert markdown text into Slack-ready payload dicts with fallback text."""
     payloads: List[Dict[str, Any]] = []
-    for blocks in convert_markdown_to_slack_messages(markdown_text):
+    for blocks in convert_markdown_to_slack_messages(
+        markdown_text, preserve_visual_blank_lines=preserve_visual_blank_lines
+    ):
         fallback_text = build_fallback_text_from_blocks(blocks).strip()
         payloads.append({"blocks": blocks, "text": fallback_text or " "})
     return payloads
@@ -1158,10 +1232,13 @@ def blocks_to_plain_text(blocks: List[Dict[str, Any]]) -> str:
             if text:
                 parts.append(
                     _normalize_markdown_block_plain_text(
-                        _strip_synthetic_spaces_from_plain_text(
-                            strip_zero_width_spaces(text),
-                            getattr(block, "_synthetic_space_indices", None),
-                        )
+                        _strip_synthetic_blank_line_placeholders(
+                            _strip_synthetic_spaces_from_plain_text(
+                                strip_zero_width_spaces(text),
+                                getattr(block, "_synthetic_space_indices", None),
+                            ),
+                            getattr(block, "_synthetic_blank_line_indices", None),
+                        ),
                     )
                 )
         elif block_type == "table":
@@ -1194,10 +1271,13 @@ def build_fallback_text_from_blocks(blocks: List[Dict[str, Any]]) -> str:
 
         if block.get("type") == "markdown":
             text = _normalize_markdown_block_plain_text(
-                _strip_synthetic_spaces_from_plain_text(
-                    strip_zero_width_spaces(block.get("text", "")),
-                    getattr(block, "_synthetic_space_indices", None),
-                )
+                _strip_synthetic_blank_line_placeholders(
+                    _strip_synthetic_spaces_from_plain_text(
+                        strip_zero_width_spaces(block.get("text", "")),
+                        getattr(block, "_synthetic_space_indices", None),
+                    ),
+                    getattr(block, "_synthetic_blank_line_indices", None),
+                ),
             )
             if text.strip():
                 plain_parts.append(text)
