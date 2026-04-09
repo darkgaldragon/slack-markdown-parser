@@ -40,6 +40,8 @@ PROTECTED_UNDERSCORE_SPAN_PATTERN = re.compile(
     r"|mailto:[^\s<]+",
     re.IGNORECASE,
 )
+REFERENCE_DEFINITION_PATTERN = re.compile(r"^[ \t]{0,3}\[[^\]\n]+\]:")
+SETEXT_HEADING_UNDERLINE_PATTERN = re.compile(r"^[ \t]{0,3}(?:=+|-+)\s*$")
 DOUBLE_UNDERSCORE_EMPHASIS_PATTERN = re.compile(
     r"(?<![\\0-9A-Za-z_])__(?=\S)(.+?\S)__(?![0-9A-Za-z_])"
 )
@@ -186,8 +188,24 @@ def _inject_visual_blank_line_placeholders(text: str) -> tuple[str, List[int]]:
             lines[blank_start - 1].strip(" \t\r")
         )
         has_visible_line_after = i < len(lines) and bool(lines[i].strip(" \t\r"))
+        next_visible_starts_reference_definition = has_visible_line_after and bool(
+            REFERENCE_DEFINITION_PATTERN.match(lines[i])
+        )
+        next_visible_starts_setext_heading = has_visible_line_after and i + 1 < len(
+            lines
+        )
+        next_visible_starts_setext_heading = bool(
+            next_visible_starts_setext_heading
+            and lines[i].strip(" \t\r")
+            and SETEXT_HEADING_UNDERLINE_PATTERN.match(lines[i + 1])
+        )
 
-        if has_visible_line_before and has_visible_line_after:
+        if (
+            has_visible_line_before
+            and has_visible_line_after
+            and not next_visible_starts_reference_definition
+            and not next_visible_starts_setext_heading
+        ):
             rewritten.extend((NBSP, True) for _ in range(i - blank_start))
         else:
             rewritten.extend((line, False) for line in lines[blank_start:i])

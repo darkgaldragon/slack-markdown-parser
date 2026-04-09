@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from slack_markdown_parser import (
     add_zero_width_spaces_to_markdown,
     blocks_to_plain_text,
@@ -154,6 +156,49 @@ def test_preserve_visual_blank_lines_skips_table_blocks() -> None:
     assert blocks[0]["text"].strip() == "intro"
     assert "\u00a0" not in blocks[0]["text"]
     assert blocks[1]["type"] == "table"
+
+
+def test_preserve_visual_blank_lines_skips_blank_before_setext_heading() -> None:
+    blocks = convert_markdown_to_slack_blocks(
+        "Intro\n\nSetext Heading\n==============\n\nBody",
+        preserve_visual_blank_lines=True,
+    )
+
+    assert blocks[0]["text"] == "Intro\n\nSetext Heading\n==============\n\u00a0\nBody"
+
+
+def test_preserve_visual_blank_lines_skips_blank_before_reference_definition() -> None:
+    payload = convert_markdown_to_slack_payloads(
+        "Reference style link: [Reference Style][ref1]\n\n"
+        "[ref1]: https://example.com/reference\n\nAfter",
+        preserve_visual_blank_lines=True,
+    )[0]
+
+    assert "\n\u00a0\n[ref1]:" not in payload["blocks"][0]["text"]
+    assert "\n\n[ref1]: <https://example.com/reference>" in payload["blocks"][0]["text"]
+    assert (
+        payload["text"] == "Reference style link: [Reference Style][ref1]\n\n"
+        "[ref1]: https://example.com/reference\n\nAfter"
+    )
+
+
+def test_preserve_visual_blank_lines_handles_corpus_sensitive_boundaries() -> None:
+    markdown_text = Path("tests/fixtures/llm_markdown_p0_corpus.md").read_text(
+        encoding="utf-8"
+    )
+
+    markdown_blocks = [
+        block
+        for block in convert_markdown_to_slack_blocks(
+            markdown_text, preserve_visual_blank_lines=True
+        )
+        if block.get("type") == "markdown"
+    ]
+
+    first_block_text = markdown_blocks[0]["text"]
+    assert "\n\u00a0\nSetext Heading" not in first_block_text
+    assert "\n\u00a0\n[ref1]:" not in first_block_text
+    assert "\n\u00a0\nBare URL:" in first_block_text
 
 
 def test_zero_width_space_not_inserted_inside_code_fence() -> None:
