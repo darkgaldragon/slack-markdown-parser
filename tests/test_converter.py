@@ -214,6 +214,32 @@ def test_preserve_visual_blank_lines_handles_corpus_sensitive_boundaries() -> No
     assert "\n\u00a0\nBare URL:" in first_block_text
 
 
+def test_preserve_visual_blank_lines_keeps_fallback_text_with_synthetic_spacing() -> (
+    None
+):
+    markdown_text = "先頭\n\n詳細は、**フロントエンド (`App.tsx`)**を確認"
+
+    payload = convert_markdown_to_slack_payloads(
+        markdown_text, preserve_visual_blank_lines=True
+    )[0]
+
+    assert payload["text"] == markdown_text
+    assert build_fallback_text_from_blocks(payload["blocks"]) == markdown_text
+
+
+def test_preserve_visual_blank_lines_keeps_fallback_text_with_zwsp_before_blank_line() -> (
+    None
+):
+    markdown_text = "日本語**太字**\n\n次行"
+
+    payload = convert_markdown_to_slack_payloads(
+        markdown_text, preserve_visual_blank_lines=True
+    )[0]
+
+    assert payload["text"] == markdown_text
+    assert build_fallback_text_from_blocks(payload["blocks"]) == markdown_text
+
+
 def test_zero_width_space_not_inserted_inside_code_fence() -> None:
     text = "```\n**not bold**\n```\noutside **bold**"
     converted = add_zero_width_spaces_to_markdown(text)

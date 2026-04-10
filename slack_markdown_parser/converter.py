@@ -153,6 +153,18 @@ def _normalize_markdown_block_plain_text(text: str) -> str:
     return re.sub(r"<(https?://[^>\s|]+)>", r"\1", text)
 
 
+def _build_markdown_block_plain_text(
+    text: str, synthetic_space_indices: Optional[List[int]] = None
+) -> str:
+    """Build fallback/plain text for a markdown block before visual-only rewrites."""
+    return _normalize_markdown_block_plain_text(
+        _strip_synthetic_spaces_from_plain_text(
+            strip_zero_width_spaces(text),
+            synthetic_space_indices,
+        )
+    )
+
+
 def _strip_synthetic_spaces_from_plain_text(
     text: str, synthetic_space_indices: Optional[List[int]] = None
 ) -> str:
@@ -1198,6 +1210,7 @@ def convert_markdown_to_slack_blocks(
                 continue
 
         formatted, synthetic_indices = _format_markdown_with_spacing_metadata(content)
+        plain_text = _build_markdown_block_plain_text(formatted, synthetic_indices)
         synthetic_blank_line_indices: List[int] = []
         if preserve_visual_blank_lines:
             formatted, synthetic_blank_line_indices = (
@@ -1205,6 +1218,7 @@ def convert_markdown_to_slack_blocks(
             )
         if formatted.strip():
             block = _AnnotatedSlackBlock({"type": "markdown", "text": formatted})
+            block._plain_text = plain_text
             block._synthetic_space_indices = synthetic_indices
             block._synthetic_blank_line_indices = synthetic_blank_line_indices
             blocks.append(block)
@@ -1273,19 +1287,21 @@ def blocks_to_plain_text(blocks: List[Dict[str, Any]]) -> str:
         block_type = block.get("type") if isinstance(block, dict) else None
 
         if block_type == "markdown":
-            text = block.get("text", "")
-            if text:
-                parts.append(
-                    _normalize_markdown_block_plain_text(
+            text = getattr(block, "_plain_text", None) or ""
+            if not text:
+                raw_text = block.get("text", "")
+                if raw_text:
+                    text = _normalize_markdown_block_plain_text(
                         _strip_synthetic_blank_line_placeholders(
                             _strip_synthetic_spaces_from_plain_text(
-                                strip_zero_width_spaces(text),
+                                strip_zero_width_spaces(raw_text),
                                 getattr(block, "_synthetic_space_indices", None),
                             ),
                             getattr(block, "_synthetic_blank_line_indices", None),
-                        ),
+                        )
                     )
-                )
+            if text:
+                parts.append(text)
         elif block_type == "table":
             rows = block.get("rows") or []
             for row in rows:
@@ -1315,15 +1331,17 @@ def build_fallback_text_from_blocks(blocks: List[Dict[str, Any]]) -> str:
             continue
 
         if block.get("type") == "markdown":
-            text = _normalize_markdown_block_plain_text(
-                _strip_synthetic_blank_line_placeholders(
-                    _strip_synthetic_spaces_from_plain_text(
-                        strip_zero_width_spaces(block.get("text", "")),
-                        getattr(block, "_synthetic_space_indices", None),
+            text = getattr(block, "_plain_text", None) or ""
+            if not text:
+                text = _normalize_markdown_block_plain_text(
+                    _strip_synthetic_blank_line_placeholders(
+                        _strip_synthetic_spaces_from_plain_text(
+                            strip_zero_width_spaces(block.get("text", "")),
+                            getattr(block, "_synthetic_space_indices", None),
+                        ),
+                        getattr(block, "_synthetic_blank_line_indices", None),
                     ),
-                    getattr(block, "_synthetic_blank_line_indices", None),
-                ),
-            )
+                )
             if text.strip():
                 plain_parts.append(text)
         elif block.get("type") == "table":
