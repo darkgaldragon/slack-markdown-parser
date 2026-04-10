@@ -37,10 +37,9 @@ are intentionally linked from CONTRIBUTING rather than from the main README.
 If your change depends on Slack's own renderer behavior, review these docs as
 needed:
 
-- `docs/slack-render-test-workflow.md`
-- `docs/slack-client-manual-checklist.md`
-- `docs/slack-nested-modifier-findings.md`
-- `docs/slack-markdown-rollout-observations.md`
+- `docs/_internal/slack-render-test-workflow.md`
+- `docs/_internal/slack-client-manual-checklist.md`
+- `docs/_internal/slack-render-test-app-manifest.yaml`
 
 ## Pull requests
 

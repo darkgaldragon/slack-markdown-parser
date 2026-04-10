@@ -1,75 +1,78 @@
 # slack-markdown-parser
 
-LLM が生成する標準的な Markdown を Slack Block Kit（`markdown` + `table` ブロック）に変換する Python ライブラリです。
+LLM が生成するふつうの Markdown を、Slack Block Kit（`markdown` + `table` ブロック）に変換する Python ライブラリです。
 
 ## 背景
 
-Slack で AI BOT を運用する場合、従来は Slack 独自の `mrkdwn` 形式に変換していましたが、以下の課題がありました。
+Slack で AI BOT を動かすとき、従来は Slack 独自の `mrkdwn` 形式に変換することが多かったのですが、次の課題がありました。
 
-- **変換コスト**: LLM は標準 Markdown を出力するため、`mrkdwn` に合わせる変換ロジックやプロンプト制御が必要
-- **装飾崩れ**: 日本語のように語間スペースがない文では、`mrkdwn` の装飾記号（`*`, `~` など）が正しくレンダリングされず記号がそのまま露出することがあり、ロジックやプロンプトでの制御も難しい
-- **テーブル非対応**: `mrkdwn` にはテーブル構文がなく、リストへ変換するなどの代替処理が必要
+- 変換の手間: LLM はふつうの Markdown を出力するため、`mrkdwn` に合わせた変換ロジックや厳しいプロンプト制御が必要になりやすい
+- 装飾の崩れ: 日本語・中国語・韓国語のように単語間に空白を入れない文では、`*` や `~` などの装飾記号がうまく解釈されず、そのまま見えてしまうことがある
+- テーブル非対応: `mrkdwn` には表の構文がないため、表をリストなどへ作り替える必要がある
 
 ## 設計方針
 
-Slack Block Kit の `markdown` ブロック（標準 Markdown 構文をそのまま受け付ける）と `table` ブロックを活用し、上記の課題を解消します。
+Slack Block Kit の `markdown` ブロックと `table` ブロックを使って、上の課題に対応します。
 
 | 課題 | 解決手段 |
 |---|---|
-| 変換コスト | `markdown` ブロックが標準 Markdown をそのまま受け付けるため、LLM 出力を変換せず利用可能 |
-| 装飾崩れ | 基本は ZWSP（ゼロ幅スペース U+200B）で装飾境界を補強し、CJK の密着文脈でインラインコードを内包する装飾が崩れる場合のみ、言語別ルールで可視スペースも使ってレンダリングを安定化する |
-| テーブル非対応 | Markdown テーブルを検知して `table` ブロックに変換。LLM の出力する多様なテーブル記法の揺れも自動補完し `invalid_blocks` エラーを回避 |
+| 変換の手間 | `markdown` ブロックがふつうの Markdown を受け取れるので、LLM 出力を `mrkdwn` に書き換えずに使う |
+| 装飾の崩れ | 基本はゼロ幅スペース（`U+200B`）で装飾記号の境界を補い、それでも崩れる一部の日本語・中国語・韓国語のケースだけ可視スペースを使う |
+| テーブル非対応 | Markdown テーブルを見つけて `table` ブロックに変換し、LLM が作りがちな表の崩れも自動で補う |
 
 このライブラリの目標は、CommonMark や HTML を完全再現することではなく、Slack 上で自然に読める表示を作ることです。
 Slack の `markdown` ブロック自体が対応していない構文は、古い `mrkdwn` へ無理に書き換えるより、安全なプレーンテキスト表示や `table` ブロック化を優先します。
 
 ## 主な機能
 
-- 標準 Markdown テキストを `markdown` ブロックに変換
-- Markdown テーブルを `table` ブロックに変換（セル内の太字・斜体・取消線・インラインコードを認識）
-- LLM が生成する多様な Markdown テーブルで起こり得る記法の揺れ（外枠パイプ不足、セパレータ行不足、列数不一致、空セル）を検知し自動補完。Slack `table` ブロックの `invalid_blocks` エラーを未然に回避
-- テーブルごとにメッセージを自動分割（Slack の「1メッセージ1テーブル」制約に対応）
-- ANSI escape / 制御文字を除去し、不正な Slack 角括弧トークンを自動で無害化
-- 装飾記号の前後に ZWSP を付与して表示崩れを抑制（フェンスドコードブロック内は除外、インラインコードは付与対象）。ただし英語系で周囲が句読点だけのケースは、Slack がそのまま安定描画できる場合に ZWSP を増やさない
-- 日本語・中国語・韓国語の密着文脈で、インラインコードを内包する装飾には可視スペースを補って Slack 表示を安定化
-- テーブルセル内の Markdown link / Slack link を認識
-- `chat.postMessage.text` 用の fallback テキストを生成（表示安定化のために入れた ZWSP や人工的な可視スペースは通知文では自然な形に正規化）
-- モデル側で Markdown を厳密に制御しなくてもよいよう、Slack 送信前にベストエフォートでサニタイズとテーブル補完を行う
+- ふつうの Markdown テキストを `markdown` ブロックに変換
+- Markdown テーブルを `table` ブロックに変換
+- LLM が生成する表で起こりやすい崩れ（外枠パイプ不足、区切り行不足、列数不一致、空セル）を補正
+- テーブルごとにメッセージを自動分割し、Slack の「1メッセージ1テーブル」制約に対応
+- ANSI escape / 制御文字を除去し、不正な Slack 角括弧トークンを無害化
+- フェンスドコードブロック外では、装飾記号の前後にゼロ幅スペースを入れて表示崩れを減らす
+- 日本語・中国語・韓国語の詰まった文で、インラインコードを含む装飾が崩れる一部のケースでは可視スペースを補って安定化
+- テーブルセル内の Markdown リンク / Slack 形式リンクを認識
+- `markdown` ブロック内の空行が見えにくい環境向けに、内部空行だけを補助用の行へ置き換える `preserve_visual_blank_lines` オプションを用意
+- `chat.postMessage.text` 用のプレビュー文字列を生成し、Slack 表示を安定させるために入れた補助文字はそこで自然な形に戻す
+- モデル側で Markdown を厳密に制御しなくてもよいよう、Slack 送信前にできる範囲でサニタイズと表補正を行う
 
-## 実測ベースの Slack 挙動
+## 実測ベースの Slack の挙動
 
 本ライブラリは、Slack の `markdown` / `table` ブロックが実際にどう見えるかを前提に設計しています。
 
-Slack は 2026-03-06 に `markdown` ブロックの公式ドキュメントを更新し、見出し、水平線、表、言語付きコードブロックなどの richer な構文を案内し始めました。ただし同時に、新しいレンダラは段階的にロールアウト中とも明記しています。したがって、対象の workspace / 投稿 surface で実測するまでは、これらの richer な構文は rollout 依存だと考えてください。
+Slack は 2026-03-06 に `markdown` ブロックの公式ドキュメントを更新し、見出し、水平線、タスクリスト、表、言語付きコードブロックなど、これまでより多くの Markdown 記法を案内し始めました。ただし、これらの機能は環境ごとに順番に有効化されるとも書かれています。つまり、ワークスペースやクライアントによって見え方が違う可能性があります。
 
-現在の Slack で安定して表示されるもの:
+現在の Slack で比較的安定して表示されるもの:
 
 - `**bold**`, `*italic*`, `~~strike~~`, インラインコード, フェンスドコード
-- bare URL, autolink, Markdown link, 参照リンク, mailto link
+- bare URL, `<https://...>` 形式リンク, Markdown リンク, 参照リンク, mailto リンク
 - 箇条書き, 番号付きリスト, タスクリスト, 単純な引用
 - Markdown テーブルを変換した明示的な Slack `table` ブロック
+- Slack 側で新しい Markdown 表示が有効な環境では、`markdown` ブロック内の見出し・水平線・表
 
 Slack 側の制約として残るもの:
 
-- `#` 見出しや setext 見出しは、rollout 状況によっては真の見出しレベルではなく、同サイズの太字/プレーンテキスト寄りに表示される
+- 見出しサイズや一部の新しい Markdown 表示は、Slack アプリ・ワークスペース・有効化状況に依存する
+- `markdown` ブロック内の段落区切りは、実測した Slack Web では上下の余白がほとんどなく、空行がつぶれて見えやすい
 - 多段引用はフル Markdown レンダラほどきれいに出ない
-- 水平線は semantic な区切りではなく線テキスト寄りに見える
-- `markdown` ブロック内の生 Markdown テーブルは rollout 依存で、明示的な Slack `table` ブロックの方が引き続き安定する
+- `markdown` ブロック内の生 Markdown テーブルは一部環境では表示されるが、安定性では明示的な Slack `table` ブロックの方が上
 - Markdown 画像記法は `markdown` ブロック内では埋め込み画像にならない
-- 数式, 生 HTML, HTML comment, `<details>`, admonition 記法, Mermaid はリッチ機能としては扱われず、テキストまたはコードとして表示される
+- 数式, 生 HTML, HTML comment, `<details>`, admonition 記法, Mermaid は特別な表示にならず、テキストまたはコードとして出る
 
-本ライブラリが吸収するもの:
+このライブラリが吸収するもの:
 
 - underscore 装飾 (`_..._`, `__...__`) を Slack 互換の asterisk 装飾へ正規化
-- bare URL を Slack の `markdown` ブロックで安定する autolink 形式へ正規化
-- LLM が崩したテーブル記法を補完して Slack `table` ブロックへ変換
-- フェンスドコード内の table 風行をテーブル正規化対象から除外
-- 生 HTML 風タグなど、不正な Slack angle token を無害化
+- bare URL を Slack の `<https://...>` 形式にそろえる
+- 崩れた Markdown テーブルを補って Slack `table` ブロックへ変換
+- フェンスドコード内の table 風行をテーブル処理から除外
+- 必要に応じて、内部空行を補助用の行に置き換えて段落の区切りを見えやすくする
+- 生 HTML 風タグなど、Slack の特殊記法としては無効な `<...>` 形式を無害化
 
 ## 利用前提
 
 - Slack Block Kit の `blocks` で `markdown` / `table` ブロックを送信できる実装が必要です。
-- `text` / `mrkdwn` のみ送信可能な経路（例: 一部の Slack MCP ツール）では利用できません。
+- `text` / `mrkdwn` のみ送信できる経路では利用できません。
 
 ## インストール
 
@@ -93,11 +96,15 @@ markdown = """
 | UI | *In progress* |
 """
 
-for payload in convert_markdown_to_slack_payloads(markdown):
+for payload in convert_markdown_to_slack_payloads(
+    markdown,
+    preserve_visual_blank_lines=True,
+):
     print(payload)
 ```
 
 `convert_markdown_to_slack_messages` は、複数テーブルを含む入力を Slack 制約に合わせて複数メッセージへ分割します。
+Slack Web の新しい `markdown` 表示で段落間の余白が極端に小さい場合は、`preserve_visual_blank_lines=True` を使うと内部空行だけを見えやすく補えます。
 
 ## 入出力イメージ
 
@@ -146,21 +153,25 @@ QA | ~~保留~~ | Team C
 
 | 関数 | 説明 |
 |---|---|
-| `convert_markdown_to_slack_messages(markdown_text) → list[list[dict]]` | Markdown をテーブル分割済みのメッセージ群に変換（主要エントリポイント） |
-| `convert_markdown_to_slack_payloads(markdown_text) → list[dict]` | `blocks` と fallback `text` を含む Slack 送信用 payload 群へ変換 |
-| `convert_markdown_to_slack_blocks(markdown_text) → list[dict]` | Markdown を Block Kit ブロックのリストに変換 |
-| `build_fallback_text_from_blocks(blocks) → str` | ブロックから `chat.postMessage.text` 用 fallback テキストを生成 |
+| `convert_markdown_to_slack_messages(markdown_text, *, preserve_visual_blank_lines=False) → list[list[dict]]` | Markdown をテーブル分割済みのメッセージ群に変換 |
+| `convert_markdown_to_slack_payloads(markdown_text, *, preserve_visual_blank_lines=False) → list[dict]` | `blocks` とプレビュー用 `text` を含む Slack 送信用データへ変換 |
+| `convert_markdown_to_slack_blocks(markdown_text, *, preserve_visual_blank_lines=False) → list[dict]` | Markdown を Block Kit ブロックのリストに変換 |
+| `build_fallback_text_from_blocks(blocks) → str` | `chat.postMessage.text` 用のプレビュー文字列を生成 |
 | `blocks_to_plain_text(blocks) → str` | ブロックからプレーンテキストを生成 |
+
+`preserve_visual_blank_lines=True` は、非テーブル領域の内部空行を「改行を見えやすくするための補助行」に置き換えるオプションです。
+この補助行はプレビュー文字列を作るときに取り除かれるので、通知文やログは元の Markdown に近い形を保てます。
+また、setext 見出しの下線直前や参照リンク定義直前には補助行を入れず、Markdown の意味が変わらないようにしています。
 
 ### ユーティリティ関数（公開関数）
 
 | 関数 | 説明 |
 |---|---|
-| `normalize_markdown_tables(markdown_text) → str` | テーブル記法を正規化（パイプ補完、セパレータ生成、列数調整） |
-| `add_zero_width_spaces_to_markdown(text) → str` | 装飾記号の前後に ZWSP を挿入（フェンスドコードブロック内は除外） |
+| `normalize_markdown_tables(markdown_text) → str` | テーブル記法を正規化（パイプ補完、区切り行生成、列数調整） |
+| `add_zero_width_spaces_to_markdown(text) → str` | 装飾記号の前後にゼロ幅スペースを挿入（フェンスドコードブロック内は除外） |
 | `decode_html_entities(text) → str` | HTML エンティティをデコード |
 | `sanitize_slack_text(text) → str` | ANSI / 制御文字を除去し、不正な Slack 角括弧トークンを無害化 |
-| `strip_zero_width_spaces(text) → str` | ZWSP (U+200B) と BOM (U+FEFF) を除去（ZWJ 等の結合制御文字は保持） |
+| `strip_zero_width_spaces(text) → str` | ゼロ幅スペース (U+200B) と BOM (U+FEFF) を除去（ZWJ 等の結合制御文字は保持） |
 
 ## 仕様
 
@@ -173,7 +184,7 @@ QA | ~~保留~~ | Team C
 ## コントリビュート
 
 不具合報告、ドキュメント改善、コードの提案を歓迎します。
-Issue / Pull Request を作成する前に [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。Slack renderer のメンテナ向け検証資料も、利用者向け README ではなく CONTRIBUTING 側から案内しています。
+Issue / Pull Request を作成する前に [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。Slack 表示のメンテナ向け検証資料は、利用者向け README ではなく CONTRIBUTING 側から案内しています。
 
 ## 変更履歴
 

@@ -6,7 +6,7 @@ actually renders generated Block Kit `markdown` and `table` output.
 This document is maintainer-facing QA guidance. It is not part of the public
 package API or behavior contract.
 
-## Rollout note
+## Slack renderer note
 
 Slack published richer `markdown` block docs and a rollout changelog on March
 6, 2026:
@@ -19,13 +19,9 @@ assume that headers, dividers, native Markdown tables, or syntax-highlighted
 code blocks will render identically across all workspaces or posting surfaces.
 Re-run the raw vs parser comparison in the workspace you care about.
 
-Recent baseline observations for Slack Web are summarized in:
-
-- `docs/slack-markdown-rollout-observations.md`
-
 ## Files
 
-- `docs/slack-render-test-app-manifest.yaml`
+- `docs/_internal/slack-render-test-app-manifest.yaml`
   - Minimal Slack App manifest for a test-only bot
 - `.env.example`
   - Example local environment variables
@@ -108,7 +104,7 @@ python scripts/generate_nested_modifier_matrix.py --content-variant parens
 python scripts/generate_nested_modifier_matrix.py --content-variant quotes
 ```
 
-Generate focused CJK nested-code fixtures:
+Generate focused Japanese/Chinese/Korean nested-code fixtures:
 
 ```bash
 python scripts/generate_nested_modifier_matrix.py \
@@ -155,4 +151,4 @@ web UI or via Playwright. `slack_sdk_version` is `null` when the script posts vi
 
 For desktop/mobile spot checks, use:
 
-- `docs/slack-client-manual-checklist.md`
+- `docs/_internal/slack-client-manual-checklist.md`
