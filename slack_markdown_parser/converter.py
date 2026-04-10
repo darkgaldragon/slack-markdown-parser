@@ -165,7 +165,9 @@ def _strip_synthetic_spaces_from_plain_text(
     )
 
 
-def _inject_visual_blank_line_placeholders(text: str) -> tuple[str, List[int]]:
+def _inject_visual_blank_line_placeholders_in_chunk(
+    text: str,
+) -> tuple[str, List[int]]:
     """Replace internal blank lines with NBSP-only lines for Slack rendering."""
     if not text or "\n" not in text:
         return text, []
@@ -222,6 +224,31 @@ def _inject_visual_blank_line_placeholders(text: str) -> tuple[str, List[int]]:
             synthetic_indices.append(offset)
         rebuilt_parts.append(line)
         offset += len(line)
+
+    return "".join(rebuilt_parts), synthetic_indices
+
+
+def _inject_visual_blank_line_placeholders(text: str) -> tuple[str, List[int]]:
+    """Replace internal blank lines outside fenced code blocks."""
+    if not text or "\n" not in text:
+        return text, []
+
+    rebuilt_parts: List[str] = []
+    synthetic_indices: List[int] = []
+    offset = 0
+
+    for is_fenced, chunk in _split_fenced_code_chunks(text):
+        if is_fenced:
+            rebuilt_parts.append(chunk)
+            offset += len(chunk)
+            continue
+
+        rewritten_chunk, chunk_indices = (
+            _inject_visual_blank_line_placeholders_in_chunk(chunk)
+        )
+        rebuilt_parts.append(rewritten_chunk)
+        synthetic_indices.extend(offset + idx for idx in chunk_indices)
+        offset += len(rewritten_chunk)
 
     return "".join(rebuilt_parts), synthetic_indices
 

@@ -158,6 +158,19 @@ def test_preserve_visual_blank_lines_skips_table_blocks() -> None:
     assert blocks[1]["type"] == "table"
 
 
+def test_preserve_visual_blank_lines_skips_fenced_code_blocks() -> None:
+    blocks = convert_markdown_to_slack_blocks(
+        "```python\nprint(1)\n\nprint(2)\n```\n\nAfter",
+        preserve_visual_blank_lines=True,
+    )
+
+    assert blocks[0]["text"] == "```python\nprint(1)\n\nprint(2)\n```\n\nAfter"
+    assert (
+        build_fallback_text_from_blocks(blocks)
+        == "```python\nprint(1)\n\nprint(2)\n```\n\nAfter"
+    )
+
+
 def test_preserve_visual_blank_lines_skips_blank_before_setext_heading() -> None:
     blocks = convert_markdown_to_slack_blocks(
         "Intro\n\nSetext Heading\n==============\n\nBody",
