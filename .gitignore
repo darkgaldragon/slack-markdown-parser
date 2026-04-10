@@ -39,8 +39,11 @@ python/
 .vscode/
 .idea/
 .serena/
-docs/_internal/
 AGENTS.md
 CLAUDE.md
 .DS_Store
 Thumbs.db
+
+# Local research / ad-hoc outputs
+output/
+uv.lock

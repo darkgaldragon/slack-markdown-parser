@@ -1,11 +1,11 @@
 # Parser Behavior Specification
 
-This document defines the conversion behavior of `slack-markdown-parser`.
+This document describes how `slack-markdown-parser` converts Markdown into Slack blocks.
 
 ## Input
 
 - A UTF-8 Markdown string
-- Malformed tables, HTML entities, and mixed plain text are accepted
+- Broken tables, HTML entities, and mixed plain text are accepted
 
 ## Output
 
@@ -17,61 +17,67 @@ This document defines the conversion behavior of `slack-markdown-parser`.
 This parser does not try to reproduce full CommonMark, HTML, or rich-document rendering.
 Its goal is to produce Slack messages that read naturally when delivered through Slack Block Kit `markdown` and `table` blocks.
 
-When Markdown fidelity and Slack readability conflict, readable Slack output takes priority.
+When exact Markdown fidelity conflicts with Slack readability, readable Slack output takes priority.
 
-## Conversion pipeline
+## Conversion steps
 
-Processing order in `convert_markdown_to_slack_blocks`:
+`convert_markdown_to_slack_blocks` processes text in this order:
 
-1. HTML entity decode: restore entities such as `&gt;` and `&amp;`
-2. Slack text sanitize: remove ANSI/control noise and neutralize invalid Slack angle-bracket tokens
-3. Underscore emphasis normalization: convert `_..._` / `__...__` into Slack-compatible `*...*` / `**...**`
-4. Table normalization: repair malformed table syntax according to the rules below
-5. Segment split: divide the text into table regions (consecutive lines containing `|`) and non-table regions
-6. Block generation:
+1. Decode HTML entities such as `&gt;` and `&amp;`
+2. Clean Slack text by removing ANSI/control noise and neutralizing invalid Slack angle-bracket tokens
+3. Normalize underscore emphasis by converting `_..._` / `__...__` into Slack-friendly `*...*` / `**...**`
+4. Normalize bare URLs by wrapping them in Slack-friendly `<https://...>` form
+5. Repair malformed tables using the rules below
+6. Split the text into table regions and non-table regions
+7. Build blocks for each region:
    - Table regions: parse inline cell styling and generate a `table` block. If conversion fails, such as when there are fewer than two candidate lines or the parse result is empty, fall back to a `markdown` block.
-   - Non-table regions: add ZWSP where needed and generate a `markdown` block
+   - Non-table regions: add zero-width spaces where needed and generate a `markdown` block.
+   - If `preserve_visual_blank_lines=True`, replace internal blank lines in non-table regions with lines that contain only a non-breaking space before emitting the `markdown` block.
 
-`convert_markdown_to_slack_messages` then splits the resulting block list to satisfy the "one table per message" constraint.
-`convert_markdown_to_slack_payloads` returns the same split blocks plus fallback `text` values ready for `chat.postMessage`.
+`convert_markdown_to_slack_messages` then splits the resulting block list to satisfy the "one table per message" rule.
+`convert_markdown_to_slack_payloads` returns the same split blocks plus preview `text` values ready for `chat.postMessage`.
 
-## Observed Slack renderer behavior
+## How Slack behaved in testing
 
-The following behaviors are based on practical validation against real Slack clients using the generated Block Kit payloads.
+The behaviors below are based on practical validation against real Slack clients using the generated Block Kit request data.
 
-### Behaviors that Slack currently renders well
+### Things Slack currently renders well
 
 - Asterisk emphasis: `*italic*`, `**bold**`
 - Strikethrough: `~~strike~~`
 - Inline code and fenced code blocks
-- Bare URLs, autolinks, Markdown links, reference-style links, and mailto links
+- Bare URLs, `<https://...>` style links, Markdown links, reference-style links, and mailto links
 - Bullet lists, ordered lists, task lists, and simple one-level blockquotes
 - Slack `table` blocks
 
-Slack's published `markdown` block support changed on March 6, 2026, but the
-docs also say that the richer renderer is still being rolled out. For that
-reason, behaviors such as true heading levels or native Markdown tables in raw
-`markdown` blocks should be treated as surface- and workspace-dependent until
-verified in your own environment.
+Slack published updated `markdown` block documentation and a changelog entry on March 6, 2026. In the Slack Web workspace validated for this project on April 8, 2026, raw `markdown` blocks rendered:
 
-### Behaviors limited by Slack itself
+- ATX and setext headings
+- `---` as a divider
+- task lists
+- raw Markdown tables
 
-- ATX headings (`#`, `##`, `###`) and setext headings may still collapse to same-size bold/plain text rather than true heading levels, depending on rollout
+Slack still controls when those newer features appear and how they look, so treat them as workspace- and client-dependent until you verify them in your own environment.
+
+### Things still limited by Slack itself
+
+- Exact heading sizes and some newer raw Markdown features still depend on the Slack app, workspace, and release state
+- Paragraph breaks inside `markdown` blocks currently receive little or no extra vertical spacing in tested Slack Web clients, so blank lines can look visually collapsed
 - Nested blockquotes are weaker than in full Markdown renderers
-- Horizontal rules render more like visible line text than semantic separators
-- Native Markdown table rendering inside raw `markdown` blocks remains rollout-dependent; explicit Slack `table` blocks are the reliable option
+- Raw Markdown tables inside `markdown` blocks now work in some newer Slack environments, but explicit Slack `table` blocks remain the reliable option
 - Markdown image syntax does not become an embedded image inside `markdown` blocks
 - Math, raw HTML, HTML comments, `<details>`, admonition syntax, and Mermaid do not receive special rich rendering
 
-### Behaviors this parser compensates for
+### Things this parser corrects or stabilizes
 
 - `_..._` and `__...__` are normalized into Slack-friendly `*...*` and `**...**`
-- Bare URLs are wrapped into Slack-friendly autolink form (`<https://...>`) before `markdown` block delivery
+- Bare URLs are wrapped into Slack-friendly `<https://...>` form before `markdown` block delivery
 - Malformed Markdown tables are repaired before `table` block generation
 - Table-like rows inside fenced code blocks are kept out of table parsing
+- Internal blank lines can optionally be rewritten into placeholder lines so Slack keeps visible paragraph separation
 - Unsupported Slack angle-bracket tokens such as `<foo>` or raw HTML-like tags are neutralized
 
-## Slack text sanitize rules
+## Slack text cleanup rules
 
 Behavior of `sanitize_slack_text`:
 
@@ -79,7 +85,7 @@ Behavior of `sanitize_slack_text`:
 - Remove general control characters except line breaks and tabs already preserved by the regex
 - Keep valid Slack angle-bracket tokens such as links, mentions, channels, special mentions, subteam mentions, and `<!date^...>`
 - Replace unsupported angle-bracket tokens such as `<foo>` with full-width brackets (`＜foo＞`) so Slack does not interpret them as malformed special syntax
-- This includes raw HTML-like tags such as `<div>` or `<span>`, which are neutralized instead of being passed through as Slack special syntax
+- This also applies to raw HTML-like tags such as `<div>` or `<span>`
 
 ## Underscore emphasis normalization rules
 
@@ -87,17 +93,17 @@ Behavior of `normalize_underscore_emphasis`:
 
 - Convert `_text_` into `*text*`
 - Convert `__text__` into `**text**`
-- Limit conversion to emphasis-style underscores that are not embedded inside ASCII alphanumeric identifiers
+- Only convert emphasis-style underscores that are not embedded inside ASCII alphanumeric identifiers
 - Preserve identifiers such as `snake_case`
 - Preserve escaped forms such as `\_escaped\_`
-- Preserve underscores inside bare URLs, Markdown links, Slack angle tokens, and inline code
+- Preserve underscores inside bare URLs, Markdown links, Slack `<...>` forms, and inline code
 - Preserve underscores inside fenced code blocks (both `` ``` `` and `~~~`)
 
 ## Table normalization rules
 
 LLMs often emit tables with omitted outer pipes, missing separator rows, or inconsistent column counts. Passing those directly to Slack `table` blocks can trigger `invalid_blocks`, so `normalize_markdown_tables` repairs them first.
 
-### Table candidate detection
+### Detecting table candidates
 
 - Buffer consecutive lines that contain `|`
 - Treat the buffered region as a table when either of the following is true:
@@ -141,17 +147,17 @@ The following link syntaxes are also recognized inside table cells:
 | `<https://example.com|label>` | Slack rich-text link |
 | `<https://example.com>` | Slack rich-text link |
 
-## ZWSP insertion rules
+## Zero-width space insertion rules
 
 Behavior of `add_zero_width_spaces_to_markdown`:
 
 ### Purpose
 
-In languages such as Japanese that do not use spaces between words, formatting markers can attach directly to surrounding characters and break Slack rendering. This library primarily inserts zero-width spaces so Slack gets clearer formatting boundaries without changing the visible layout. For some nested inline-code emphasis cases in dense CJK text, it falls back to visible spaces because current Slack rendering is more reliable with explicit spacing.
+In languages such as Japanese, Chinese, and Korean that do not usually put spaces between words, formatting markers can attach directly to surrounding characters and break Slack rendering. This library mainly inserts zero-width spaces so Slack gets clearer formatting boundaries without changing the visible layout. For some nested inline-code emphasis cases in dense Japanese, Chinese, or Korean text, it falls back to visible spaces because current Slack rendering is more reliable with explicit spacing.
 
 ### Target patterns
 
-For each formatting token below, if either adjacent side is not a space, tab, newline, or existing ZWSP, or if the token touches the start or end of a line, the whole token is normally wrapped in ZWSP (`U+200B`) so Slack recognizes it as a standalone formatting boundary:
+For each formatting token below, if either adjacent side is not a space, tab, newline, or existing zero-width space, or if the token touches the start or end of a line, the whole token is normally wrapped in a zero-width space (`U+200B`) so Slack recognizes it as a standalone formatting boundary:
 
 - `` `code` ``: inline code
 - `**bold**`: bold
@@ -160,26 +166,26 @@ For each formatting token below, if either adjacent side is not a space, tab, ne
 
 Exception:
 
-- If the token body is English-like text and the only tight neighbors are punctuation characters, the raw token is preserved. This avoids over-correcting spans such as `**APIYI (apiyi.com)**:` that Slack already renders correctly without extra ZWSP.
+- If the token body is English-like text and the only tight neighbors are punctuation characters, the raw token is preserved. This avoids over-correcting spans such as `**APIYI (apiyi.com)**:` that Slack already renders correctly without extra zero-width spaces.
 
 ### Excluded regions
 
 - Fenced code blocks (both `` ``` ... ``` `` and `~~~ ... ~~~`) are never modified
 - Inline code (`` `...` ``) is not excluded; it is part of the target set above
-- Inline code nested inside `**bold**`, `*italic*`, or `~~strike~~` is left untouched.
-- For English-like boundaries around those nested combinations, the outer formatting span is preserved as-is.
-- For dense Japanese/Chinese boundaries, visible spaces are inserted on the missing outer side(s) around the outer formatting span.
-- For dense Korean boundaries, a visible trailing space is inserted when needed, while right-space cases are otherwise preserved because Slack already renders them more reliably.
+- Inline code nested inside `**bold**`, `*italic*`, or `~~strike~~` is left untouched
+- For English-like boundaries around those nested combinations, the outer formatting span is preserved as-is
+- For dense Japanese and Chinese boundaries, visible spaces are inserted on the missing outer side or sides around the outer formatting span
+- For dense Korean boundaries, a visible trailing space is inserted when needed, while right-space cases are otherwise preserved because Slack already renders them more reliably
 
-## ZWSP removal rules
+## Zero-width space removal rules
 
-`strip_zero_width_spaces` is called when generating table cells and fallback text so that control characters inserted by this library do not leak into plain output.
+`strip_zero_width_spaces` is called when generating table cells and preview text so that control characters inserted by this library do not leak into plain output.
 
 ### Removed characters
 
 | Code point | Name | Reason |
 |---|---|---|
-| `U+200B` | ZWSP (zero-width space) | Inserted by this library for formatting stability |
+| `U+200B` | zero-width space | Inserted by this library for formatting stability |
 | `U+FEFF` | BOM (byte order mark) | Unwanted encoding artifact |
 
 ### Preserved characters
@@ -189,16 +195,32 @@ Exception:
 | `U+200C` | ZWNJ (zero-width non-joiner) | Used for word-shape control in languages such as Persian and Hindi |
 | `U+200D` | ZWJ (zero-width joiner) | Required for joined emoji and other grapheme composition |
 
-## Fallback text
+## Optional blank-line visibility workaround
+
+When `preserve_visual_blank_lines=True` is passed to the main conversion APIs,
+the parser rewrites internal blank-only lines in non-table Markdown segments
+into lines that contain only a non-breaking space before emitting Slack `markdown`
+blocks.
+
+This workaround is intentionally narrow:
+
+- Only blank lines between visible lines are rewritten
+- Leading and trailing blank runs are left untouched
+- Table segments are not modified by this option
+- Blank runs immediately before setext-heading underlines are left untouched
+- Blank runs immediately before reference-link definitions are left untouched
+- Preview text and `blocks_to_plain_text` remove those placeholder markers again, preserving the original blank lines in plain-text output
+
+## Preview text
 
 `build_fallback_text_from_blocks` generates preview text for `chat.postMessage.text` as follows:
 
-- `markdown` blocks: text with ZWSP removed
-- Parser-inserted visible spaces used only to stabilize nested inline-code emphasis are normalized back out when building plain fallback text
+- `markdown` blocks: text with zero-width spaces removed
+- Parser-inserted visible spaces used only to stabilize nested inline-code emphasis are normalized back out when building plain preview text
 - `table` blocks: join each row's cell text with ` | `
 - Join block outputs with blank lines between them
 
-For table-cell links, fallback text uses the link label if present, otherwise the URL.
+For table-cell links, preview text uses the link label if present, otherwise the URL.
 
 ## Determinism
 

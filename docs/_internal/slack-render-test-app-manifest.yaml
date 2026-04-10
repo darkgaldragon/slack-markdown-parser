@@ -3,13 +3,13 @@ _metadata:
   minor_version: 1
 
 display_information:
-  name: SMP Render Test Bot
+  name: Slack Markdown Render Test Bot
   description: Test-only Slack app for validating markdown rendering behavior.
   background_color: "#2f7d32"
 
 features:
   bot_user:
-    display_name: smp-render-test-bot
+    display_name: markdown-render-test-bot
     always_online: false
 
 oauth_config:

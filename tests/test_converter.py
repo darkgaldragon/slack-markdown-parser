@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from slack_markdown_parser import (
     add_zero_width_spaces_to_markdown,
     blocks_to_plain_text,
@@ -111,6 +113,131 @@ middle text
     assert len(messages) >= 3
     for message_blocks in messages:
         assert sum(1 for b in message_blocks if b.get("type") == "table") <= 1
+
+
+def test_preserve_visual_blank_lines_injects_nbsp_lines_in_markdown_blocks() -> None:
+    blocks = convert_markdown_to_slack_blocks(
+        "alpha\n\nbeta", preserve_visual_blank_lines=True
+    )
+
+    assert blocks[0]["type"] == "markdown"
+    assert blocks[0]["text"] == "alpha\n\u00a0\nbeta"
+
+
+def test_preserve_visual_blank_lines_keeps_fallback_text_unchanged() -> None:
+    payload = convert_markdown_to_slack_payloads(
+        "alpha\n\nbeta", preserve_visual_blank_lines=True
+    )[0]
+
+    assert payload["blocks"][0]["text"] == "alpha\n\u00a0\nbeta"
+    assert payload["text"] == "alpha\n\nbeta"
+
+
+def test_preserve_visual_blank_lines_keeps_multiple_blank_lines() -> None:
+    blocks = convert_markdown_to_slack_blocks(
+        "alpha\n\n\nbeta", preserve_visual_blank_lines=True
+    )
+
+    assert blocks[0]["text"] == "alpha\n\u00a0\n\u00a0\nbeta"
+    assert build_fallback_text_from_blocks(blocks) == "alpha\n\n\nbeta"
+
+
+def test_preserve_visual_blank_lines_skips_table_blocks() -> None:
+    raw = """intro
+
+| A | B |
+|---|---|
+| 1 | 2 |
+"""
+
+    blocks = convert_markdown_to_slack_blocks(raw, preserve_visual_blank_lines=True)
+
+    assert blocks[0]["type"] == "markdown"
+    assert blocks[0]["text"].strip() == "intro"
+    assert "\u00a0" not in blocks[0]["text"]
+    assert blocks[1]["type"] == "table"
+
+
+def test_preserve_visual_blank_lines_skips_fenced_code_blocks() -> None:
+    blocks = convert_markdown_to_slack_blocks(
+        "```python\nprint(1)\n\nprint(2)\n```\n\nAfter",
+        preserve_visual_blank_lines=True,
+    )
+
+    assert blocks[0]["text"] == "```python\nprint(1)\n\nprint(2)\n```\n\nAfter"
+    assert (
+        build_fallback_text_from_blocks(blocks)
+        == "```python\nprint(1)\n\nprint(2)\n```\n\nAfter"
+    )
+
+
+def test_preserve_visual_blank_lines_skips_blank_before_setext_heading() -> None:
+    blocks = convert_markdown_to_slack_blocks(
+        "Intro\n\nSetext Heading\n==============\n\nBody",
+        preserve_visual_blank_lines=True,
+    )
+
+    assert blocks[0]["text"] == "Intro\n\nSetext Heading\n==============\n\u00a0\nBody"
+
+
+def test_preserve_visual_blank_lines_skips_blank_before_reference_definition() -> None:
+    payload = convert_markdown_to_slack_payloads(
+        "Reference style link: [Reference Style][ref1]\n\n"
+        "[ref1]: https://example.com/reference\n\nAfter",
+        preserve_visual_blank_lines=True,
+    )[0]
+
+    assert "\n\u00a0\n[ref1]:" not in payload["blocks"][0]["text"]
+    assert "\n\n[ref1]: <https://example.com/reference>" in payload["blocks"][0]["text"]
+    assert (
+        payload["text"] == "Reference style link: [Reference Style][ref1]\n\n"
+        "[ref1]: https://example.com/reference\n\nAfter"
+    )
+
+
+def test_preserve_visual_blank_lines_handles_corpus_sensitive_boundaries() -> None:
+    markdown_text = Path("tests/fixtures/llm_markdown_p0_corpus.md").read_text(
+        encoding="utf-8"
+    )
+
+    markdown_blocks = [
+        block
+        for block in convert_markdown_to_slack_blocks(
+            markdown_text, preserve_visual_blank_lines=True
+        )
+        if block.get("type") == "markdown"
+    ]
+
+    first_block_text = markdown_blocks[0]["text"]
+    assert "\n\u00a0\nSetext Heading" not in first_block_text
+    assert "\n\u00a0\n[ref1]:" not in first_block_text
+    assert "\n\u00a0\nBare URL:" in first_block_text
+
+
+def test_preserve_visual_blank_lines_keeps_fallback_text_with_synthetic_spacing() -> (
+    None
+):
+    markdown_text = "先頭\n\n詳細は、**フロントエンド (`App.tsx`)**を確認"
+
+    payload = convert_markdown_to_slack_payloads(
+        markdown_text, preserve_visual_blank_lines=True
+    )[0]
+
+    assert payload["text"] == markdown_text
+    assert build_fallback_text_from_blocks(payload["blocks"]) == markdown_text
+
+
+def test_preserve_visual_blank_lines_keeps_fallback_text_with_zwsp_before_blank_line() -> (
+    None
+):
+    markdown_text = "日本語**太字**\n\n次行"
+
+    payload = convert_markdown_to_slack_payloads(
+        markdown_text, preserve_visual_blank_lines=True
+    )[0]
+
+    assert payload["text"] == markdown_text
+    assert build_fallback_text_from_blocks(payload["blocks"]) == markdown_text
 
 
 def test_zero_width_space_not_inserted_inside_code_fence() -> None:

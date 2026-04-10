@@ -1,10 +1,11 @@
 include LICENSE
 include README.md
 include README-ja.md
-include CONTRIBUTING.md
 include CHANGELOG.md
-recursive-include docs *.md
+include docs/spec.md
+include docs/spec-ja.md
+exclude CONTRIBUTING.md
 prune docs/_internal
-recursive-include tests *.py *.md
+prune tests
 recursive-include slack_markdown_parser py.typed
-global-exclude __pycache__ *.py[cod]
+global-exclude __pycache__ *.py[cod] .DS_Store

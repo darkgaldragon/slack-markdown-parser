@@ -6,17 +6,22 @@ actually renders generated Block Kit `markdown` and `table` output.
 This document is maintainer-facing QA guidance. It is not part of the public
 package API or behavior contract.
 
-## Rollout note
+## Slack renderer note
 
-Slack published richer `markdown` block docs on March 6, 2026, but the docs
-also say that the new renderer is still being rolled out. Do not assume that
-headers, dividers, native Markdown tables, or syntax-highlighted code blocks
-will render identically across all workspaces or posting surfaces. Re-run the
-raw vs parser comparison in the workspace you care about.
+Slack published richer `markdown` block docs and a rollout changelog on March
+6, 2026:
+
+- [https://docs.slack.dev/reference/block-kit/blocks/markdown-block/](https://docs.slack.dev/reference/block-kit/blocks/markdown-block/)
+- [https://docs.slack.dev/changelog/2026/03/06/block-kit-rich-text](https://docs.slack.dev/changelog/2026/03/06/block-kit-rich-text)
+
+Those docs also say that the new renderer is still being rolled out. Do not
+assume that headers, dividers, native Markdown tables, or syntax-highlighted
+code blocks will render identically across all workspaces or posting surfaces.
+Re-run the raw vs parser comparison in the workspace you care about.
 
 ## Files
 
-- `docs/slack-render-test-app-manifest.yaml`
+- `docs/_internal/slack-render-test-app-manifest.yaml`
   - Minimal Slack App manifest for a test-only bot
 - `.env.example`
   - Example local environment variables
@@ -99,7 +104,7 @@ python scripts/generate_nested_modifier_matrix.py --content-variant parens
 python scripts/generate_nested_modifier_matrix.py --content-variant quotes
 ```
 
-Generate focused CJK nested-code fixtures:
+Generate focused Japanese/Chinese/Korean nested-code fixtures:
 
 ```bash
 python scripts/generate_nested_modifier_matrix.py \
@@ -139,9 +144,11 @@ web UI or via Playwright. `slack_sdk_version` is `null` when the script posts vi
    - bold/italic/strike recognition
    - punctuation boundaries
    - Japanese vs English surrounding text
+   - header/divider/task-list/raw-table rollout behavior
+   - paragraph spacing and blank-line visibility
    - transport-specific differences, if any
    - fallback text behavior when relevant
 
 For desktop/mobile spot checks, use:
 
-- `docs/slack-client-manual-checklist.md`
+- `docs/_internal/slack-client-manual-checklist.md`
