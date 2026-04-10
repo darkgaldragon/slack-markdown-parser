@@ -6,6 +6,13 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-04-10
+
+### Fixed
+
+- Stopped `preserve_visual_blank_lines` from inserting visual-only blank-line placeholders inside fenced code blocks.
+- Kept fallback plain text stable when visual blank-line placeholders are enabled alongside parser-added spacing markers around emphasis or inline code.
+
 ## [2.3.0] - 2026-04-10
 
 ### Changed
