@@ -45,5 +45,58 @@ jobs:
         with:
           name: python-package-distributions
           path: dist/
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Resolve version from tag
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Check whether version already exists on PyPI
+        id: pypi
+        env:
+          PACKAGE_NAME: slack-markdown-parser
+          PACKAGE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          package = os.environ["PACKAGE_NAME"]
+          version = os.environ["PACKAGE_VERSION"]
+          url = f"https://pypi.org/pypi/{package}/json"
+          exists = False
+
+          try:
+              with urllib.request.urlopen(url, timeout=10) as response:
+                  payload = json.load(response)
+              exists = version in payload.get("releases", {})
+          except Exception as exc:
+              print(f"PyPI preflight check failed ({exc}); continuing with publish attempt.")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"already_published={'true' if exists else 'false'}\n")
+          PY
+      - name: Skip publish because version already exists
+        if: steps.pypi.outputs.already_published == 'true'
+        run: |
+          echo "Version ${{ steps.version.outputs.version }} already exists on PyPI."
+          echo "Skipping Trusted Publisher upload and continuing to GitHub Release creation."
       - name: Publish to PyPI
+        if: steps.pypi.outputs.already_published != 'true'
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Create GitHub release
+    needs: publish
+    if: needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
