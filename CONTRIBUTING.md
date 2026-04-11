@@ -65,3 +65,14 @@ Helpful reports usually include:
 
 Project maintainers keep release history in `CHANGELOG.md`.
 If your pull request affects users, please include a short changelog note in the PR description.
+
+## Maintainer releases
+
+Package publishing is handled by GitHub Actions Trusted Publishing only.
+Maintainers should create or update the changelog, create an annotated tag like
+`v2.3.2`, and push the tag to GitHub.
+
+Do not publish with `twine upload`, `uv publish`, or a local PyPI API token for
+this repository. If a tag points to a version that is already present on PyPI,
+the publish workflow now skips the upload and still creates the matching GitHub
+Release so the repository release list stays current.
