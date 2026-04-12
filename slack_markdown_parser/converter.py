@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import html
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 ZWSP = "\u200b"
 NBSP = "\u00a0"
@@ -118,7 +118,7 @@ def _nested_code_space_strategy(
     source: str,
     start: int,
     end: int,
-    boundary_chars: Optional[set[str]] = None,
+    boundary_chars: set[str] | None = None,
 ) -> str | None:
     boundary_chars = boundary_chars or {*VISIBLE_BOUNDARY_CHARS, ZWSP}
     neighbors = []
@@ -154,7 +154,7 @@ def _normalize_markdown_block_plain_text(text: str) -> str:
 
 
 def _build_markdown_block_plain_text(
-    text: str, synthetic_space_indices: Optional[List[int]] = None
+    text: str, synthetic_space_indices: list[int] | None = None
 ) -> str:
     """Build fallback/plain text for a markdown block before visual-only rewrites."""
     return _normalize_markdown_block_plain_text(
@@ -166,7 +166,7 @@ def _build_markdown_block_plain_text(
 
 
 def _strip_synthetic_spaces_from_plain_text(
-    text: str, synthetic_space_indices: Optional[List[int]] = None
+    text: str, synthetic_space_indices: list[int] | None = None
 ) -> str:
     if not text or not synthetic_space_indices:
         return text
@@ -179,13 +179,13 @@ def _strip_synthetic_spaces_from_plain_text(
 
 def _inject_visual_blank_line_placeholders_in_chunk(
     text: str,
-) -> tuple[str, List[int]]:
+) -> tuple[str, list[int]]:
     """Replace internal blank lines with NBSP-only lines for Slack rendering."""
     if not text or "\n" not in text:
         return text, []
 
     lines = text.split("\n")
-    rewritten: List[tuple[str, bool]] = []
+    rewritten: list[tuple[str, bool]] = []
     i = 0
 
     while i < len(lines):
@@ -224,8 +224,8 @@ def _inject_visual_blank_line_placeholders_in_chunk(
         else:
             rewritten.extend((line, False) for line in lines[blank_start:i])
 
-    rebuilt_parts: List[str] = []
-    synthetic_indices: List[int] = []
+    rebuilt_parts: list[str] = []
+    synthetic_indices: list[int] = []
     offset = 0
 
     for idx, (line, is_synthetic) in enumerate(rewritten):
@@ -240,13 +240,13 @@ def _inject_visual_blank_line_placeholders_in_chunk(
     return "".join(rebuilt_parts), synthetic_indices
 
 
-def _inject_visual_blank_line_placeholders(text: str) -> tuple[str, List[int]]:
+def _inject_visual_blank_line_placeholders(text: str) -> tuple[str, list[int]]:
     """Replace internal blank lines outside fenced code blocks."""
     if not text or "\n" not in text:
         return text, []
 
-    rebuilt_parts: List[str] = []
-    synthetic_indices: List[int] = []
+    rebuilt_parts: list[str] = []
+    synthetic_indices: list[int] = []
     offset = 0
 
     for is_fenced, chunk in _split_fenced_code_chunks(text):
@@ -266,7 +266,7 @@ def _inject_visual_blank_line_placeholders(text: str) -> tuple[str, List[int]]:
 
 
 def _strip_synthetic_blank_line_placeholders(
-    text: str, synthetic_blank_line_indices: Optional[List[int]] = None
+    text: str, synthetic_blank_line_indices: list[int] | None = None
 ) -> str:
     if not text or not synthetic_blank_line_indices:
         return text
@@ -277,12 +277,12 @@ def _strip_synthetic_blank_line_placeholders(
     )
 
 
-def _remove_synthetic_space_markers(text: str) -> tuple[str, List[int]]:
+def _remove_synthetic_space_markers(text: str) -> tuple[str, list[int]]:
     if not text or SYNTH_SPACE_MARKER not in text:
         return text, []
 
-    cleaned: List[str] = []
-    synthetic_indices: List[int] = []
+    cleaned: list[str] = []
+    synthetic_indices: list[int] = []
     mark_next_space = False
 
     for char in text:
@@ -366,7 +366,7 @@ def normalize_bare_urls_for_slack_markdown(text: str) -> str:
         return text
 
     def wrap_chunk(chunk: str) -> str:
-        parts: List[str] = []
+        parts: list[str] = []
         cursor = 0
         length = len(chunk)
 
@@ -430,7 +430,7 @@ def sanitize_slack_text(text: str) -> str:
     return SLACK_ANGLE_TOKEN_PATTERN.sub(replace_invalid_token, cleaned)
 
 
-def _match_fence_open(line: str) -> Optional[tuple[str, int]]:
+def _match_fence_open(line: str) -> tuple[str, int] | None:
     match = FENCE_OPEN_PATTERN.match(line)
     if not match:
         return None
@@ -447,13 +447,13 @@ def _is_fence_close(line: str, fence: tuple[str, int]) -> bool:
     )
 
 
-def _split_fenced_code_chunks(text: str) -> List[tuple[bool, str]]:
-    chunks: List[tuple[bool, str]] = []
+def _split_fenced_code_chunks(text: str) -> list[tuple[bool, str]]:
+    chunks: list[tuple[bool, str]] = []
     if not text:
         return chunks
 
-    current: List[str] = []
-    active_fence: Optional[tuple[str, int]] = None
+    current: list[str] = []
+    active_fence: tuple[str, int] | None = None
 
     for line in text.splitlines(keepends=True):
         opening_fence = _match_fence_open(line) if active_fence is None else None
@@ -479,7 +479,7 @@ def _split_fenced_code_chunks(text: str) -> List[tuple[bool, str]]:
 
 
 def _normalize_underscore_emphasis_chunk(text: str) -> str:
-    protected_spans: List[str] = []
+    protected_spans: list[str] = []
 
     def protect(match: re.Match[str]) -> str:
         token = f"\ufff0{len(protected_spans)}\ufff1"
@@ -517,7 +517,7 @@ def add_zero_width_spaces_to_markdown(text: str) -> str:
     return formatted
 
 
-def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, List[int]]:
+def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, list[int]]:
     """Return formatted markdown text plus synthetic visible-space positions."""
     if not text:
         return text, []
@@ -615,12 +615,12 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, List[int]]:
         suffix = STRIP_RIGHT_ZWSP_MARKER if after_char == ZWSP else ""
         return f"{prefix}{adjusted_text}{suffix}"
 
-    def wrap_segment(segment: str) -> tuple[str, List[int]]:
+    def wrap_segment(segment: str) -> tuple[str, list[int]]:
         if not segment:
             return segment, []
 
         placeholder_map: dict[str, dict[str, str]] = {}
-        protected_parts: List[str] = []
+        protected_parts: list[str] = []
         last_end = 0
 
         for idx, match in enumerate(INLINE_CODE_SPAN_PATTERN.finditer(segment)):
@@ -690,8 +690,8 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, List[int]]:
         return _remove_synthetic_space_markers(protected_segment)
 
     chunks = _split_fenced_code_chunks(text)
-    combined_parts: List[str] = []
-    combined_indices: List[int] = []
+    combined_parts: list[str] = []
+    combined_indices: list[int] = []
     offset = 0
     for is_fenced, chunk in chunks:
         if is_fenced:
@@ -710,7 +710,7 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, List[int]]:
 add_zero_width_spaces = add_zero_width_spaces_to_markdown
 
 
-def _split_markdown_table_cells(line: str) -> List[str]:
+def _split_markdown_table_cells(line: str) -> list[str]:
     """Split markdown table cells while preserving pipes inside <...|...> links."""
     working = line.strip()
     if not working:
@@ -721,8 +721,8 @@ def _split_markdown_table_cells(line: str) -> List[str]:
     if working.endswith("|"):
         working = working[:-1]
 
-    cells: List[str] = []
-    current: List[str] = []
+    cells: list[str] = []
+    current: list[str] = []
     in_angle = False
     escaped = False
     cursor = 0
@@ -772,8 +772,8 @@ def _count_cell_words(cell_text: str) -> int:
 
 
 def _split_heading_prefix_and_first_cell(
-    heading_prefix: str, reference_cell: Optional[str]
-) -> Optional[tuple[str, str]]:
+    heading_prefix: str, reference_cell: str | None
+) -> tuple[str, str] | None:
     tokens = [token for token in heading_prefix.strip().split() if token]
     if len(tokens) < 2:
         return None
@@ -792,8 +792,8 @@ def _split_heading_prefix_and_first_cell(
 
 
 def _split_heading_and_table_row(
-    line: str, next_line: Optional[str] = None
-) -> Optional[tuple[str, str]]:
+    line: str, next_line: str | None = None
+) -> tuple[str, str] | None:
     """Split lines like '# Heading |a|b|' into heading and table row."""
     if "|" not in line:
         return None
@@ -851,7 +851,7 @@ def _split_heading_and_table_row(
     if not explicit_cells:
         return None
 
-    reference_cell: Optional[str] = None
+    reference_cell: str | None = None
     if (
         next_line
         and "|" in next_line
@@ -887,10 +887,10 @@ def normalize_markdown_tables(markdown_text: str) -> str:
         return markdown_text
 
     lines = markdown_text.splitlines()
-    normalized: List[str] = []
-    buffer: List[str] = []
+    normalized: list[str] = []
+    buffer: list[str] = []
 
-    def is_table_block(candidates: List[str]) -> bool:
+    def is_table_block(candidates: list[str]) -> bool:
         if len(candidates) < 2:
             return False
         if any(
@@ -898,7 +898,7 @@ def normalize_markdown_tables(markdown_text: str) -> str:
         ):
             return True
 
-        column_counts: List[int] = []
+        column_counts: list[int] = []
         for line in candidates:
             working = line.strip()
             if "|" not in working:
@@ -955,7 +955,7 @@ def normalize_markdown_tables(markdown_text: str) -> str:
             normalized.extend(buffer)
         buffer = []
 
-    active_fence: Optional[tuple[str, int]] = None
+    active_fence: tuple[str, int] | None = None
 
     for idx, line in enumerate(lines):
         opening_fence = _match_fence_open(line) if active_fence is None else None
@@ -1003,13 +1003,13 @@ def looks_like_markdown_table(text: str) -> bool:
     return table_like_lines >= 2
 
 
-def _create_table_cell(text: str) -> Dict[str, Any]:
+def _create_table_cell(text: str) -> dict[str, Any]:
     """Build Slack rich_text cell from markdown fragment."""
     clean_text = strip_zero_width_spaces(text or "")
     clean_text = clean_text.replace("\\|", "|")
     if not clean_text.strip():
         clean_text = "-"
-    elements: List[Dict[str, Any]] = []
+    elements: list[dict[str, Any]] = []
     last_index = 0
 
     for match in TABLE_TOKEN_PATTERN.finditer(clean_text):
@@ -1018,7 +1018,7 @@ def _create_table_cell(text: str) -> Dict[str, Any]:
             if prefix:
                 elements.append({"type": "text", "text": prefix})
 
-        element: Dict[str, Any]
+        element: dict[str, Any]
         markdown_label = match.group("markdown_label")
         markdown_url = match.group("markdown_url")
         angle_url = match.group("angle_url")
@@ -1034,7 +1034,7 @@ def _create_table_cell(text: str) -> Dict[str, Any]:
                 "text": angle_label or angle_url,
             }
         else:
-            style: Dict[str, bool] = {}
+            style: dict[str, bool] = {}
             content = token
 
             if content.startswith("`") and content.endswith("`"):
@@ -1070,13 +1070,13 @@ def _create_table_cell(text: str) -> Dict[str, Any]:
     }
 
 
-def extract_plain_text_from_table_cell(cell: Dict[str, Any]) -> str:
+def extract_plain_text_from_table_cell(cell: dict[str, Any]) -> str:
     """Extract plain text from a Slack table cell object."""
     if not isinstance(cell, dict):
         return ""
 
     if cell.get("type") == "rich_text":
-        texts: List[str] = []
+        texts: list[str] = []
         for element in cell.get("elements", []):
             if not isinstance(element, dict):
                 continue
@@ -1094,13 +1094,13 @@ def extract_plain_text_from_table_cell(cell: Dict[str, Any]) -> str:
     return str(cell.get("text", ""))
 
 
-def markdown_table_to_slack_table(table_markdown: str) -> Optional[Dict[str, Any]]:
+def markdown_table_to_slack_table(table_markdown: str) -> dict[str, Any] | None:
     """Convert markdown table text to Slack table block."""
     lines = [
         line.rstrip() for line in table_markdown.strip().splitlines() if line.strip()
     ]
-    rows: List[List[Dict[str, Any]]] = []
-    expected_columns: Optional[int] = None
+    rows: list[list[dict[str, Any]]] = []
+    expected_columns: int | None = None
 
     for line in lines:
         if TABLE_SEPARATOR_PATTERN.match(line):
@@ -1131,15 +1131,15 @@ def markdown_table_to_slack_table(table_markdown: str) -> Optional[Dict[str, Any
 markdown_table_to_table_block = markdown_table_to_slack_table
 
 
-def split_markdown_into_segments(markdown_text: str) -> List[Dict[str, str]]:
+def split_markdown_into_segments(markdown_text: str) -> list[dict[str, str]]:
     """Split markdown into alternating text/table segments."""
-    segments: List[Dict[str, str]] = []
+    segments: list[dict[str, str]] = []
     if not markdown_text:
         return segments
 
     lines = markdown_text.splitlines()
-    current: List[str] = []
-    current_is_table: Optional[bool] = None
+    current: list[str] = []
+    current_is_table: bool | None = None
 
     def flush() -> None:
         nonlocal current, current_is_table
@@ -1153,7 +1153,7 @@ def split_markdown_into_segments(markdown_text: str) -> List[Dict[str, str]]:
         current = []
         current_is_table = None
 
-    active_fence: Optional[tuple[str, int]] = None
+    active_fence: tuple[str, int] | None = None
 
     for line in lines:
         stripped = line.strip()
@@ -1186,7 +1186,7 @@ def split_markdown_into_segments(markdown_text: str) -> List[Dict[str, str]]:
 
 def convert_markdown_to_slack_blocks(
     markdown_text: str, *, preserve_visual_blank_lines: bool = False
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Convert markdown text into Slack markdown/table blocks."""
     if not markdown_text:
         return []
@@ -1196,7 +1196,7 @@ def convert_markdown_to_slack_blocks(
     markdown_text = normalize_underscore_emphasis(markdown_text)
     markdown_text = normalize_bare_urls_for_slack_markdown(markdown_text)
     markdown_text = normalize_markdown_tables(markdown_text)
-    blocks: List[Dict[str, Any]] = []
+    blocks: list[dict[str, Any]] = []
 
     for segment in split_markdown_into_segments(markdown_text):
         content = segment.get("content", "")
@@ -1211,7 +1211,7 @@ def convert_markdown_to_slack_blocks(
 
         formatted, synthetic_indices = _format_markdown_with_spacing_metadata(content)
         plain_text = _build_markdown_block_plain_text(formatted, synthetic_indices)
-        synthetic_blank_line_indices: List[int] = []
+        synthetic_blank_line_indices: list[int] = []
         if preserve_visual_blank_lines:
             formatted, synthetic_blank_line_indices = (
                 _inject_visual_blank_line_placeholders(formatted)
@@ -1230,10 +1230,10 @@ def convert_markdown_to_slack_blocks(
 convert_markdown_text_to_blocks = convert_markdown_to_slack_blocks
 
 
-def split_blocks_by_table(blocks: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+def split_blocks_by_table(blocks: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     """Split blocks into multiple messages to satisfy one-table-per-message constraint."""
-    messages: List[List[Dict[str, Any]]] = []
-    current_message: List[Dict[str, Any]] = []
+    messages: list[list[dict[str, Any]]] = []
+    current_message: list[dict[str, Any]] = []
 
     for block in blocks or []:
         if isinstance(block, dict) and block.get("type") == "table":
@@ -1254,7 +1254,7 @@ def convert_markdown_to_slack_messages(
     markdown_text: str,
     *,
     preserve_visual_blank_lines: bool = False,
-) -> List[List[Dict[str, Any]]]:
+) -> list[list[dict[str, Any]]]:
     """Convert markdown text into a list of Slack message block groups."""
     blocks = convert_markdown_to_slack_blocks(
         markdown_text, preserve_visual_blank_lines=preserve_visual_blank_lines
@@ -1268,9 +1268,9 @@ def convert_markdown_to_slack_payloads(
     markdown_text: str,
     *,
     preserve_visual_blank_lines: bool = False,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Convert markdown text into Slack-ready payload dicts with fallback text."""
-    payloads: List[Dict[str, Any]] = []
+    payloads: list[dict[str, Any]] = []
     for blocks in convert_markdown_to_slack_messages(
         markdown_text, preserve_visual_blank_lines=preserve_visual_blank_lines
     ):
@@ -1279,9 +1279,9 @@ def convert_markdown_to_slack_payloads(
     return payloads
 
 
-def blocks_to_plain_text(blocks: List[Dict[str, Any]]) -> str:
+def blocks_to_plain_text(blocks: list[dict[str, Any]]) -> str:
     """Build plain text representation from Slack blocks."""
-    parts: List[str] = []
+    parts: list[str] = []
 
     for block in blocks or []:
         block_type = block.get("type") if isinstance(block, dict) else None
@@ -1305,7 +1305,7 @@ def blocks_to_plain_text(blocks: List[Dict[str, Any]]) -> str:
         elif block_type == "table":
             rows = block.get("rows") or []
             for row in rows:
-                cell_texts: List[str] = []
+                cell_texts: list[str] = []
                 if not isinstance(row, list):
                     continue
                 for cell in row:
@@ -1322,9 +1322,9 @@ def blocks_to_plain_text(blocks: List[Dict[str, Any]]) -> str:
     return "\n".join([p for p in parts if p]).strip()
 
 
-def build_fallback_text_from_blocks(blocks: List[Dict[str, Any]]) -> str:
+def build_fallback_text_from_blocks(blocks: list[dict[str, Any]]) -> str:
     """Build Slack fallback text from block structure."""
-    plain_parts: List[str] = []
+    plain_parts: list[str] = []
 
     for block in blocks or []:
         if not isinstance(block, dict):
@@ -1345,7 +1345,7 @@ def build_fallback_text_from_blocks(blocks: List[Dict[str, Any]]) -> str:
             if text.strip():
                 plain_parts.append(text)
         elif block.get("type") == "table":
-            table_lines: List[str] = []
+            table_lines: list[str] = []
             for row in block.get("rows", []):
                 if not isinstance(row, list):
                     continue
@@ -1359,9 +1359,9 @@ def build_fallback_text_from_blocks(blocks: List[Dict[str, Any]]) -> str:
 
 
 # Backward-compatible helper retained for existing imports.
-def parse_markdown_table(table_text: str) -> List[List[str]]:
+def parse_markdown_table(table_text: str) -> list[list[str]]:
     """Parse markdown table into row/cell text matrix."""
-    rows: List[List[str]] = []
+    rows: list[list[str]] = []
     for line in [line for line in table_text.strip().splitlines() if line.strip()]:
         if TABLE_SEPARATOR_PATTERN.match(line.strip()):
             continue
