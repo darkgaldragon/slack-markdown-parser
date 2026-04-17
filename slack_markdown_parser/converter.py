@@ -42,6 +42,9 @@ PROTECTED_UNDERSCORE_SPAN_PATTERN = re.compile(
 )
 REFERENCE_DEFINITION_PATTERN = re.compile(r"^[ \t]{0,3}\[[^\]\n]+\]:")
 SETEXT_HEADING_UNDERLINE_PATTERN = re.compile(r"^[ \t]{0,3}(?:=+|-+)\s*$")
+THEMATIC_BREAK_PATTERN = re.compile(
+    r"^[ \t]{0,3}(?P<char>[-_*])(?:[ \t]*\1){2,}[ \t]*$"
+)
 LIST_ITEM_PATTERN = re.compile(
     r"^(?P<indent>[ \t]*)(?P<marker>\d+[.)]|[-+*])(?P<spacing>[ \t]+|$)"
 )
@@ -207,6 +210,10 @@ def _is_ordered_list_marker(marker: str) -> bool:
     return bool(marker) and marker[0].isdigit()
 
 
+def _is_thematic_break_line(line: str) -> bool:
+    return bool(THEMATIC_BREAK_PATTERN.match(line))
+
+
 def _ordered_list_marker_starts_at_one(marker: str) -> bool:
     if not _is_ordered_list_marker(marker):
         return False
@@ -215,6 +222,8 @@ def _ordered_list_marker_starts_at_one(marker: str) -> bool:
 
 def _starts_root_list_item(lines: list[str], marker_index: int) -> bool:
     line = lines[marker_index]
+    if _is_thematic_break_line(line):
+        return False
     match = LIST_ITEM_PATTERN.match(line)
     if not match or _indent_width(match.group("indent") or "") > 3:
         return False
@@ -250,7 +259,7 @@ def _line_belongs_to_list_context(
 
         line_indent = _indent_width(line)
         nested_match = LIST_ITEM_PATTERN.match(line)
-        if nested_match:
+        if nested_match and not _is_thematic_break_line(line):
             marker_indent = _indent_width(nested_match.group("indent") or "")
             while list_indent_stack and marker_indent < list_indent_stack[-1][0]:
                 list_indent_stack.pop()

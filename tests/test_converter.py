@@ -310,6 +310,28 @@ def test_preserve_visual_blank_lines_still_rewrites_blank_before_ordered_list() 
     assert payload["text"] == "Intro\n\n1. first\n2. second"
 
 
+def test_preserve_visual_blank_lines_rewrites_blank_after_dash_thematic_break() -> None:
+    payload = convert_markdown_to_slack_payloads(
+        "Intro\n- - -\n\nAfter",
+        preserve_visual_blank_lines=True,
+    )[0]
+
+    assert payload["blocks"][0]["text"] == "Intro\n- - -\n\u00a0\nAfter"
+    assert payload["text"] == "Intro\n- - -\n\nAfter"
+
+
+def test_preserve_visual_blank_lines_rewrites_blank_after_asterisk_thematic_break() -> (
+    None
+):
+    payload = convert_markdown_to_slack_payloads(
+        "Intro\n* * *\n\nAfter",
+        preserve_visual_blank_lines=True,
+    )[0]
+
+    assert payload["blocks"][0]["text"] == "Intro\n* * *\n\u00a0\nAfter"
+    assert payload["text"] == "Intro\n* * *\n\nAfter"
+
+
 def test_preserve_visual_blank_lines_handles_corpus_sensitive_boundaries() -> None:
     markdown_text = Path("tests/fixtures/llm_markdown_p0_corpus.md").read_text(
         encoding="utf-8"
