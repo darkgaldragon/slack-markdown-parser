@@ -34,6 +34,12 @@ The following documents are maintainer-facing QA references for validating real
 Slack renderer behavior. They are not part of the public package contract and
 are intentionally linked from CONTRIBUTING rather than from the main README.
 
+Keep any examples in those docs scrubbed for the public repository:
+
+- use placeholder-only values for tokens, channel IDs, permalinks, and workspace URLs
+- never commit real `.env` contents or workspace-specific test notes
+- keep exploratory notes in a private workspace, not under `docs/_internal/`
+
 If your change depends on Slack's own renderer behavior, review these docs as
 needed:
 
