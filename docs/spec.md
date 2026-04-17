@@ -207,7 +207,7 @@ This workaround is intentionally narrow:
 - Only blank lines between visible lines are rewritten
 - Leading and trailing blank runs are left untouched
 - Table segments are not modified by this option
-- Blank runs immediately after list items are left untouched
+- Blank runs immediately after list-item content are left untouched
 - Blank runs immediately before setext-heading underlines are left untouched
 - Blank runs immediately before reference-link definitions are left untouched
 - Preview text and `blocks_to_plain_text` remove those placeholder markers again, preserving the original blank lines in plain-text output

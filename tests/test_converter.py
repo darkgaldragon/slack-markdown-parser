@@ -205,6 +205,50 @@ def test_preserve_visual_blank_lines_skips_blank_after_ordered_list() -> None:
     assert payload["text"] == "1. first\n2. second\n\nAfter"
 
 
+def test_preserve_visual_blank_lines_skips_blank_after_ordered_list_continuation() -> (
+    None
+):
+    payload = convert_markdown_to_slack_payloads(
+        "1. first\n   continuation\n\nAfter",
+        preserve_visual_blank_lines=True,
+    )[0]
+
+    assert payload["blocks"][0]["text"] == "1. first\n   continuation\n\nAfter"
+    assert payload["text"] == "1. first\n   continuation\n\nAfter"
+
+
+def test_preserve_visual_blank_lines_skips_blank_after_nested_ordered_list() -> None:
+    payload = convert_markdown_to_slack_payloads(
+        "1. first\n    1. nested\n\nAfter",
+        preserve_visual_blank_lines=True,
+    )[0]
+
+    assert payload["blocks"][0]["text"] == "1. first\n    1. nested\n\nAfter"
+    assert payload["text"] == "1. first\n    1. nested\n\nAfter"
+
+
+def test_preserve_visual_blank_lines_skips_blank_after_unordered_list_continuation() -> (
+    None
+):
+    payload = convert_markdown_to_slack_payloads(
+        "- first\n  continuation\n\nAfter",
+        preserve_visual_blank_lines=True,
+    )[0]
+
+    assert payload["blocks"][0]["text"] == "- first\n  continuation\n\nAfter"
+    assert payload["text"] == "- first\n  continuation\n\nAfter"
+
+
+def test_preserve_visual_blank_lines_skips_blank_inside_list_item_paragraph() -> None:
+    payload = convert_markdown_to_slack_payloads(
+        "1. first\n\n   same item paragraph",
+        preserve_visual_blank_lines=True,
+    )[0]
+
+    assert payload["blocks"][0]["text"] == "1. first\n\n   same item paragraph"
+    assert payload["text"] == "1. first\n\n   same item paragraph"
+
+
 def test_preserve_visual_blank_lines_still_rewrites_blank_before_ordered_list() -> None:
     payload = convert_markdown_to_slack_payloads(
         "Intro\n\n1. first\n2. second",

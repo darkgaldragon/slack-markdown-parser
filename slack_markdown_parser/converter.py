@@ -42,7 +42,9 @@ PROTECTED_UNDERSCORE_SPAN_PATTERN = re.compile(
 )
 REFERENCE_DEFINITION_PATTERN = re.compile(r"^[ \t]{0,3}\[[^\]\n]+\]:")
 SETEXT_HEADING_UNDERLINE_PATTERN = re.compile(r"^[ \t]{0,3}(?:=+|-+)\s*$")
-LIST_ITEM_PATTERN = re.compile(r"^[ \t]{0,3}(?:\d+[.)]|[-+*])(?:[ \t]+|$)")
+LIST_ITEM_PATTERN = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<marker>\d+[.)]|[-+*])(?P<spacing>[ \t]+|$)"
+)
 DOUBLE_UNDERSCORE_EMPHASIS_PATTERN = re.compile(
     r"(?<![\\0-9A-Za-z_])__(?=\S)(.+?\S)__(?![0-9A-Za-z_])"
 )
@@ -178,6 +180,81 @@ def _strip_synthetic_spaces_from_plain_text(
     )
 
 
+def _indent_width(text: str) -> int:
+    width = 0
+    for char in text:
+        if char == " ":
+            width += 1
+        elif char == "\t":
+            # Treat tabs conservatively for list-continuation heuristics.
+            width += 4
+        else:
+            break
+    return width
+
+
+def _list_item_content_indent(match: re.Match[str]) -> int:
+    spacing = match.group("spacing") or ""
+    spacing_width = _indent_width(spacing) if spacing else 1
+    return (
+        _indent_width(match.group("indent") or "")
+        + len(match.group("marker") or "")
+        + spacing_width
+    )
+
+
+def _line_belongs_to_list_context(
+    lines: list[str], *, marker_index: int, target_index: int
+) -> bool:
+    marker_match = LIST_ITEM_PATTERN.match(lines[marker_index])
+    if not marker_match:
+        return False
+
+    content_indent_stack = [_list_item_content_indent(marker_match)]
+
+    for idx in range(marker_index + 1, target_index + 1):
+        line = lines[idx]
+        if not line.strip(" \t\r"):
+            return False
+
+        line_indent = _indent_width(line)
+        while content_indent_stack and line_indent < content_indent_stack[-1]:
+            content_indent_stack.pop()
+
+        if not content_indent_stack:
+            return False
+
+        nested_match = LIST_ITEM_PATTERN.match(line)
+        if nested_match and line_indent >= content_indent_stack[-1]:
+            content_indent_stack.append(_list_item_content_indent(nested_match))
+            continue
+
+        if line_indent >= content_indent_stack[-1]:
+            continue
+
+        return False
+
+    return True
+
+
+def _blank_run_follows_list_context(lines: list[str], blank_start: int) -> bool:
+    previous_visible_index = blank_start - 1
+    if previous_visible_index < 0 or not lines[previous_visible_index].strip(" \t\r"):
+        return False
+
+    block_start = previous_visible_index
+    while block_start > 0 and lines[block_start - 1].strip(" \t\r"):
+        block_start -= 1
+
+    for marker_index in range(previous_visible_index, block_start - 1, -1):
+        if _line_belongs_to_list_context(
+            lines, marker_index=marker_index, target_index=previous_visible_index
+        ):
+            return True
+
+    return False
+
+
 def _inject_visual_blank_line_placeholders_in_chunk(
     text: str,
 ) -> tuple[str, list[int]]:
@@ -203,8 +280,8 @@ def _inject_visual_blank_line_placeholders_in_chunk(
             lines[blank_start - 1].strip(" \t\r")
         )
         has_visible_line_after = i < len(lines) and bool(lines[i].strip(" \t\r"))
-        previous_visible_ends_list = has_visible_line_before and bool(
-            LIST_ITEM_PATTERN.match(lines[blank_start - 1])
+        blank_run_follows_list_context = has_visible_line_before and (
+            _blank_run_follows_list_context(lines, blank_start)
         )
         next_visible_starts_reference_definition = has_visible_line_after and bool(
             REFERENCE_DEFINITION_PATTERN.match(lines[i])
@@ -221,7 +298,7 @@ def _inject_visual_blank_line_placeholders_in_chunk(
         if (
             has_visible_line_before
             and has_visible_line_after
-            and not previous_visible_ends_list
+            and not blank_run_follows_list_context
             and not next_visible_starts_reference_definition
             and not next_visible_starts_setext_heading
         ):
