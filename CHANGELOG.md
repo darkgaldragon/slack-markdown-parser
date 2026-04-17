@@ -6,6 +6,13 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 ## [Unreleased]
 
+## [2.3.2] - 2026-04-17
+
+### Fixed
+
+- Stopped `preserve_visual_blank_lines` from keeping ordered-list context open after list items, including continued items, nested lists, and ordered-list paragraph interruption edge cases.
+- Avoided false-positive list-context detection for indented non-list lines and thematic breaks, so visible blank-line preservation no longer regresses on inputs like `    1. not-a-list` or `- - -`.
+
 ## [2.3.1] - 2026-04-10
 
 ### Fixed
