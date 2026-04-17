@@ -249,6 +249,21 @@ def test_preserve_visual_blank_lines_skips_blank_inside_list_item_paragraph() ->
     assert payload["text"] == "1. first\n\n   same item paragraph"
 
 
+def test_preserve_visual_blank_lines_rewrites_blank_after_indented_non_list_marker() -> (
+    None
+):
+    payload = convert_markdown_to_slack_payloads(
+        "Intro\n\n    1. not-a-list\n\nAfter",
+        preserve_visual_blank_lines=True,
+    )[0]
+
+    assert (
+        payload["blocks"][0]["text"]
+        == "Intro\n\u00a0\n    1. not-a-list\n\u00a0\nAfter"
+    )
+    assert payload["text"] == "Intro\n\n    1. not-a-list\n\nAfter"
+
+
 def test_preserve_visual_blank_lines_still_rewrites_blank_before_ordered_list() -> None:
     payload = convert_markdown_to_slack_payloads(
         "Intro\n\n1. first\n2. second",

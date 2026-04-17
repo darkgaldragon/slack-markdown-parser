@@ -203,6 +203,11 @@ def _list_item_content_indent(match: re.Match[str]) -> int:
     )
 
 
+def _starts_root_list_item(line: str) -> bool:
+    match = LIST_ITEM_PATTERN.match(line)
+    return bool(match and _indent_width(match.group("indent") or "") <= 3)
+
+
 def _line_belongs_to_list_context(
     lines: list[str], *, marker_index: int, target_index: int
 ) -> bool:
@@ -247,6 +252,8 @@ def _blank_run_follows_list_context(lines: list[str], blank_start: int) -> bool:
         block_start -= 1
 
     for marker_index in range(previous_visible_index, block_start - 1, -1):
+        if not _starts_root_list_item(lines[marker_index]):
+            continue
         if _line_belongs_to_list_context(
             lines, marker_index=marker_index, target_index=previous_visible_index
         ):
