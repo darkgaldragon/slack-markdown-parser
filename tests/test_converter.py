@@ -264,6 +264,42 @@ def test_preserve_visual_blank_lines_rewrites_blank_after_indented_non_list_mark
     assert payload["text"] == "Intro\n\n    1. not-a-list\n\nAfter"
 
 
+def test_preserve_visual_blank_lines_rewrites_blank_after_paragraph_numbered_line_starting_at_two() -> (
+    None
+):
+    payload = convert_markdown_to_slack_payloads(
+        "Intro\n2. step\n\nAfter",
+        preserve_visual_blank_lines=True,
+    )[0]
+
+    assert payload["blocks"][0]["text"] == "Intro\n2. step\n\u00a0\nAfter"
+    assert payload["text"] == "Intro\n2. step\n\nAfter"
+
+
+def test_preserve_visual_blank_lines_keeps_blank_after_paragraph_numbered_line_starting_at_one() -> (
+    None
+):
+    payload = convert_markdown_to_slack_payloads(
+        "Intro\n1. step\n\nAfter",
+        preserve_visual_blank_lines=True,
+    )[0]
+
+    assert payload["blocks"][0]["text"] == "Intro\n1. step\n\nAfter"
+    assert payload["text"] == "Intro\n1. step\n\nAfter"
+
+
+def test_preserve_visual_blank_lines_keeps_blank_after_ordered_list_starting_at_two_after_blank() -> (
+    None
+):
+    payload = convert_markdown_to_slack_payloads(
+        "Intro\n\n2. step\n\nAfter",
+        preserve_visual_blank_lines=True,
+    )[0]
+
+    assert payload["blocks"][0]["text"] == "Intro\n\u00a0\n2. step\n\nAfter"
+    assert payload["text"] == "Intro\n\n2. step\n\nAfter"
+
+
 def test_preserve_visual_blank_lines_still_rewrites_blank_before_ordered_list() -> None:
     payload = convert_markdown_to_slack_payloads(
         "Intro\n\n1. first\n2. second",

@@ -203,9 +203,30 @@ def _list_item_content_indent(match: re.Match[str]) -> int:
     )
 
 
-def _starts_root_list_item(line: str) -> bool:
+def _is_ordered_list_marker(marker: str) -> bool:
+    return bool(marker) and marker[0].isdigit()
+
+
+def _ordered_list_marker_starts_at_one(marker: str) -> bool:
+    if not _is_ordered_list_marker(marker):
+        return False
+    return marker[:-1] == "1"
+
+
+def _starts_root_list_item(lines: list[str], marker_index: int) -> bool:
+    line = lines[marker_index]
     match = LIST_ITEM_PATTERN.match(line)
-    return bool(match and _indent_width(match.group("indent") or "") <= 3)
+    if not match or _indent_width(match.group("indent") or "") > 3:
+        return False
+
+    marker = match.group("marker") or ""
+    if marker_index == 0 or not lines[marker_index - 1].strip(" \t\r"):
+        return True
+
+    if not _is_ordered_list_marker(marker):
+        return True
+
+    return _ordered_list_marker_starts_at_one(marker)
 
 
 def _line_belongs_to_list_context(
@@ -215,7 +236,12 @@ def _line_belongs_to_list_context(
     if not marker_match:
         return False
 
-    content_indent_stack = [_list_item_content_indent(marker_match)]
+    list_indent_stack = [
+        (
+            _indent_width(marker_match.group("indent") or ""),
+            _list_item_content_indent(marker_match),
+        )
+    ]
 
     for idx in range(marker_index + 1, target_index + 1):
         line = lines[idx]
@@ -223,18 +249,37 @@ def _line_belongs_to_list_context(
             return False
 
         line_indent = _indent_width(line)
-        while content_indent_stack and line_indent < content_indent_stack[-1]:
-            content_indent_stack.pop()
+        nested_match = LIST_ITEM_PATTERN.match(line)
+        if nested_match:
+            marker_indent = _indent_width(nested_match.group("indent") or "")
+            while list_indent_stack and marker_indent < list_indent_stack[-1][0]:
+                list_indent_stack.pop()
 
-        if not content_indent_stack:
+            if not list_indent_stack:
+                return False
+
+            if marker_indent == list_indent_stack[-1][0]:
+                list_indent_stack[-1] = (
+                    marker_indent,
+                    _list_item_content_indent(nested_match),
+                )
+                continue
+
+            if marker_indent >= list_indent_stack[-1][1]:
+                list_indent_stack.append(
+                    (
+                        marker_indent,
+                        _list_item_content_indent(nested_match),
+                    )
+                )
+                continue
+
             return False
 
-        nested_match = LIST_ITEM_PATTERN.match(line)
-        if nested_match and line_indent >= content_indent_stack[-1]:
-            content_indent_stack.append(_list_item_content_indent(nested_match))
-            continue
+        while len(list_indent_stack) > 1 and line_indent < list_indent_stack[-1][0]:
+            list_indent_stack.pop()
 
-        if line_indent >= content_indent_stack[-1]:
+        if line_indent >= list_indent_stack[-1][1]:
             continue
 
         return False
@@ -252,7 +297,7 @@ def _blank_run_follows_list_context(lines: list[str], blank_start: int) -> bool:
         block_start -= 1
 
     for marker_index in range(previous_visible_index, block_start - 1, -1):
-        if not _starts_root_list_item(lines[marker_index]):
+        if not _starts_root_list_item(lines, marker_index):
             continue
         if _line_belongs_to_list_context(
             lines, marker_index=marker_index, target_index=previous_visible_index
