@@ -195,6 +195,26 @@ def test_preserve_visual_blank_lines_skips_blank_before_reference_definition() -
     )
 
 
+def test_preserve_visual_blank_lines_skips_blank_after_ordered_list() -> None:
+    payload = convert_markdown_to_slack_payloads(
+        "1. first\n2. second\n\nAfter",
+        preserve_visual_blank_lines=True,
+    )[0]
+
+    assert payload["blocks"][0]["text"] == "1. first\n2. second\n\nAfter"
+    assert payload["text"] == "1. first\n2. second\n\nAfter"
+
+
+def test_preserve_visual_blank_lines_still_rewrites_blank_before_ordered_list() -> None:
+    payload = convert_markdown_to_slack_payloads(
+        "Intro\n\n1. first\n2. second",
+        preserve_visual_blank_lines=True,
+    )[0]
+
+    assert payload["blocks"][0]["text"] == "Intro\n\u00a0\n1. first\n2. second"
+    assert payload["text"] == "Intro\n\n1. first\n2. second"
+
+
 def test_preserve_visual_blank_lines_handles_corpus_sensitive_boundaries() -> None:
     markdown_text = Path("tests/fixtures/llm_markdown_p0_corpus.md").read_text(
         encoding="utf-8"

@@ -7,6 +7,7 @@ The rule is simple:
 
 - Keep reproducible checklists and workflows here.
 - Keep generic setup assets here when they are required by those workflows.
+- Keep all examples placeholder-only so the public repository never exposes real tokens, workspace URLs, channel IDs, or permalinks.
 - Do not keep exploratory notes, ambiguous observations, or project-specific
   planning memos here.
 

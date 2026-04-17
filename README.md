@@ -179,8 +179,9 @@ Markdown segments with lines that contain only a non-breaking space. Those
 placeholder lines are removed again when generating preview plain text, so Slack
 notifications and logs stay close to the original Markdown source.
 The current implementation deliberately skips blank runs that sit immediately
-before setext-heading underlines or reference-link definitions, because those
-boundaries can change Markdown meaning in newer Slack Markdown rendering.
+after list items, before setext-heading underlines, or before reference-link
+definitions, because those boundaries can change Markdown meaning in newer
+Slack Markdown rendering or keep list formatting open in some clients.
 
 ### Utility functions
 

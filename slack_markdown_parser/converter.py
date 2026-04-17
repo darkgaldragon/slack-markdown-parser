@@ -42,6 +42,7 @@ PROTECTED_UNDERSCORE_SPAN_PATTERN = re.compile(
 )
 REFERENCE_DEFINITION_PATTERN = re.compile(r"^[ \t]{0,3}\[[^\]\n]+\]:")
 SETEXT_HEADING_UNDERLINE_PATTERN = re.compile(r"^[ \t]{0,3}(?:=+|-+)\s*$")
+LIST_ITEM_PATTERN = re.compile(r"^[ \t]{0,3}(?:\d+[.)]|[-+*])(?:[ \t]+|$)")
 DOUBLE_UNDERSCORE_EMPHASIS_PATTERN = re.compile(
     r"(?<![\\0-9A-Za-z_])__(?=\S)(.+?\S)__(?![0-9A-Za-z_])"
 )
@@ -202,6 +203,9 @@ def _inject_visual_blank_line_placeholders_in_chunk(
             lines[blank_start - 1].strip(" \t\r")
         )
         has_visible_line_after = i < len(lines) and bool(lines[i].strip(" \t\r"))
+        previous_visible_ends_list = has_visible_line_before and bool(
+            LIST_ITEM_PATTERN.match(lines[blank_start - 1])
+        )
         next_visible_starts_reference_definition = has_visible_line_after and bool(
             REFERENCE_DEFINITION_PATTERN.match(lines[i])
         )
@@ -217,6 +221,7 @@ def _inject_visual_blank_line_placeholders_in_chunk(
         if (
             has_visible_line_before
             and has_visible_line_after
+            and not previous_visible_ends_list
             and not next_visible_starts_reference_definition
             and not next_visible_starts_setext_heading
         ):
