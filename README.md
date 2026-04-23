@@ -70,6 +70,7 @@ Known Slack-side limitations:
 - Raw Markdown tables inside `markdown` blocks now render in some newer Slack environments, but explicit Slack `table` blocks remain the reliable option across workspaces and delivery paths
 - Markdown image syntax does not become an embedded image in `markdown` blocks
 - Math, raw HTML, HTML comments, `<details>`, admonition syntax, and Mermaid are rendered as plain text or code, not as rich features
+- The Slack **mobile** app re-prefixes the list marker onto each continuation line of a list item inside `markdown` blocks (e.g. `1. Heading` followed by an indented paragraph shows as `1. Heading` / `1.continuation` on mobile, while Slack desktop and Slack Web render the same payload correctly). This is a Slack client-side rendering behavior, not a parser bug. Tracking: [issue #45](https://github.com/darkgaldragon/slack-markdown-parser/issues/45).
 
 What this library compensates for:
 

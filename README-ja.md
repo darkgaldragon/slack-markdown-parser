@@ -59,6 +59,7 @@ Slack 側の制約として残るもの:
 - `markdown` ブロック内の生 Markdown テーブルは一部環境では表示されるが、安定性では明示的な Slack `table` ブロックの方が上
 - Markdown 画像記法は `markdown` ブロック内では埋め込み画像にならない
 - 数式, 生 HTML, HTML comment, `<details>`, admonition 記法, Mermaid は特別な表示にならず、テキストまたはコードとして出る
+- Slack **モバイル**アプリは、`markdown` ブロック内のリスト項目に属する継続行（CommonMark で同じリスト項目に紐づくインデントされた段落）の先頭に、リストマーカーを再付加してしまう。例: `1. 見出し` の次にインデントされた継続段落を置くと、モバイルでは `1. 見出し` と `1.継続行...` のように番号が重複して表示される。Slack デスクトップ／Web は同じペイロードを正しく描画する。これはパーサー側の不具合ではなく Slack クライアントのレンダリング挙動。追跡: [issue #45](https://github.com/darkgaldragon/slack-markdown-parser/issues/45)。
 
 このライブラリが吸収するもの:
 
