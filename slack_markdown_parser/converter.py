@@ -30,9 +30,6 @@ STANDALONE_IMAGE_PATTERN = re.compile(
     r"(?:[ \t]+(?P<title>\"[^\"\n]*\"|'[^'\n]*'))?[ \t]*\)[ \t]*$",
     re.IGNORECASE,
 )
-ATX_HEADING_PATTERN = re.compile(
-    r"^[ \t]{0,3}(?P<marker>#{1,6})[ \t]+(?P<text>.+?)\s*$"
-)
 MARKDOWN_LINK_PATTERN = re.compile(r"\[[^\]\n]+\]\([^\)\n]+\)")
 INLINE_CODE_SPAN_PATTERN = re.compile(r"(?<!`)`[^`\n]+`(?!`)", flags=re.DOTALL)
 EMPHASIS_PATTERNS = (
@@ -58,6 +55,7 @@ LIST_ITEM_PATTERN = re.compile(
     r"^(?P<indent>[ \t]*)(?P<marker>\d+[.)]|[-+*])(?P<spacing>[ \t]+|$)"
 )
 TASK_LIST_MARKER_PATTERN = re.compile(r"^\[[ xX]\](?:[ \t]+|$)")
+MARKDOWN_BACKSLASH_ESCAPE_PATTERN = re.compile(r"\\[\\`*_{}\[\]()#+\-.!>|]")
 DOUBLE_UNDERSCORE_EMPHASIS_PATTERN = re.compile(
     r"(?<![\\0-9A-Za-z_])__(?=\S)(.+?\S)__(?![0-9A-Za-z_])"
 )
@@ -88,6 +86,7 @@ ALLOWED_SLACK_ANGLE_TOKEN_PATTERNS = (
     re.compile(r"^<!subteam\^[A-Z0-9]+(?:\|[^>\n]+)?>$"),
     re.compile(r"^<!date\^[^>\n]+>$"),
 )
+SLACK_MAX_BLOCKS_PER_MESSAGE = 50
 
 
 def decode_html_entities(text: str) -> str:
@@ -234,6 +233,15 @@ def _list_indent_level(indent: str) -> int:
     if width <= 3:
         return 0
     return min(8, ((width - 4) // 4) + 1)
+
+
+def _is_ambiguous_rich_list_indent(indent: str) -> bool:
+    width = _indent_width(indent or "")
+    return 0 < width <= 3
+
+
+def _has_markdown_backslash_escape(text: str) -> bool:
+    return bool(MARKDOWN_BACKSLASH_ESCAPE_PATTERN.search(text or ""))
 
 
 def _is_thematic_break_line(line: str) -> bool:
@@ -1322,7 +1330,10 @@ def _truncate_plain_text(text: str, max_length: int) -> str:
 
 
 def _is_http_url(url: str) -> bool:
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
@@ -1464,6 +1475,8 @@ def _quote_lines_are_simple(lines: list[str]) -> bool:
             return False
         if _match_fence_open(stripped):
             return False
+        if _has_markdown_backslash_escape(stripped):
+            return False
     return True
 
 
@@ -1513,11 +1526,17 @@ def _parse_simple_list_item(line: str) -> dict[str, Any] | None:
     if TASK_LIST_MARKER_PATTERN.match(text):
         return None
 
+    indent = match.group("indent") or ""
+    if _is_ambiguous_rich_list_indent(indent):
+        return None
+    if _has_markdown_backslash_escape(text):
+        return None
+
     marker = match.group("marker")
     return {
         "style": "ordered" if _is_ordered_list_marker(marker) else "bullet",
         "number": _ordered_list_marker_number(marker),
-        "indent": _list_indent_level(match.group("indent") or ""),
+        "indent": _list_indent_level(indent),
         "text": text.strip() or " ",
     }
 
@@ -1810,7 +1829,7 @@ convert_markdown_text_to_blocks = convert_markdown_to_slack_blocks
 
 
 def split_blocks_by_table(blocks: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-    """Split blocks into multiple messages to satisfy one-table-per-message constraint."""
+    """Split blocks to satisfy Slack table and per-message block constraints."""
     messages: list[list[dict[str, Any]]] = []
     current_message: list[dict[str, Any]] = []
 
@@ -1821,6 +1840,9 @@ def split_blocks_by_table(blocks: list[dict[str, Any]]) -> list[list[dict[str, A
             messages.append([block])
             current_message = []
         else:
+            if len(current_message) >= SLACK_MAX_BLOCKS_PER_MESSAGE:
+                messages.append(current_message)
+                current_message = []
             current_message.append(block)
 
     if current_message:

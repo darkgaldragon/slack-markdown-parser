@@ -10,7 +10,7 @@ This document describes how `slack-markdown-parser` converts Markdown into Slack
 ## Output
 
 - Slack Block Kit blocks (`markdown`, `table`, `rich_text`, `image`, and `divider`)
-- When the input contains multiple tables, a list of messages that satisfies the "one table per message" rule
+- When the input contains multiple tables or many promoted blocks, a list of messages that satisfies the "one table per message" rule and Slack's per-message block-count limit
 
 ## Design target
 
@@ -34,7 +34,7 @@ When exact Markdown fidelity conflicts with Slack readability, readable Slack ou
    - Non-table regions: first promote safe standalone Markdown constructs into richer Block Kit blocks, then add zero-width spaces where needed and generate `markdown` blocks for the remaining text.
    - If `preserve_visual_blank_lines=True`, replace internal blank lines in remaining `markdown` blocks with lines that contain only a non-breaking space before emitting the `markdown` block.
 
-`convert_markdown_to_slack_messages` then splits the resulting block list to satisfy the "one table per message" rule.
+`convert_markdown_to_slack_messages` then splits the resulting block list to satisfy the "one table per message" rule and Slack's per-message block-count limit.
 `convert_markdown_to_slack_payloads` returns the same split blocks plus preview `text` values ready for `chat.postMessage`.
 
 ## How Slack behaved in testing
@@ -80,7 +80,7 @@ Slack still controls when those newer features appear and how they look, so trea
   - fenced code blocks to `rich_text_preformatted`
   - simple one-level quotes to `rich_text_quote`
   - simple bullet and ordered lists to `rich_text_list`
-    - Lists are promoted only when the list starts at the beginning of the text region or after a blank line, each non-blank line in the run is a list item, and the run is not followed by an indented continuation paragraph.
+    - Lists are promoted only when the list starts at the beginning of the text region or after a blank line, each non-blank line in the run is a list item, the list does not use ambiguous 1-3-space nested indentation, the item text does not rely on Markdown backslash escapes, and the run is not followed by an indented continuation paragraph.
 - Table-like rows inside fenced code blocks are kept out of table parsing
 - Internal blank lines can optionally be rewritten into placeholder lines so Slack keeps visible paragraph separation
 - Unsupported Slack angle-bracket tokens such as `<foo>` or raw HTML-like tags are neutralized

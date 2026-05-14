@@ -75,6 +75,43 @@ def test_unclosed_fenced_code_remains_markdown_without_rich_promotions() -> None
     assert build_fallback_text_from_blocks(blocks) == raw
 
 
+def test_malformed_standalone_image_url_falls_back_to_markdown() -> None:
+    raw = "![bad](http://[::1)"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert [block["type"] for block in blocks] == ["markdown"]
+    assert build_fallback_text_from_blocks(blocks) == raw
+
+
+def test_ambiguous_two_space_nested_list_remains_markdown() -> None:
+    raw = "- parent\n  - child"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert [block["type"] for block in blocks] == ["markdown"]
+    assert build_fallback_text_from_blocks(blocks) == raw
+
+
+def test_escaped_quote_and_list_items_remain_markdown() -> None:
+    quote_blocks = convert_markdown_to_slack_blocks("> \\*literal\\*")
+    list_blocks = convert_markdown_to_slack_blocks("- \\*literal\\*")
+
+    assert [block["type"] for block in quote_blocks] == ["markdown"]
+    assert [block["type"] for block in list_blocks] == ["markdown"]
+
+
+def test_promoted_blocks_are_split_at_slack_block_limit() -> None:
+    raw = "\n\n".join(
+        f"![Image {index}](https://example.com/{index}.png)" for index in range(55)
+    )
+
+    messages = convert_markdown_to_slack_messages(raw)
+
+    assert [len(message) for message in messages] == [50, 5]
+    assert all(block["type"] == "image" for message in messages for block in message)
+
+
 def test_callout_quote_uses_supported_rich_text_quote() -> None:
     blocks = convert_markdown_to_slack_blocks(
         "> [!NOTE]\n> This is an admonition-like block."
