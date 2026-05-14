@@ -6,6 +6,12 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-05-14
+
+### Added
+
+- Added automatic richer Block Kit output for unambiguous standalone Markdown constructs, including image blocks, dividers, fenced code, simple quotes, and simple lists, while leaving Markdown headings in `markdown` blocks so Slack can preserve heading levels.
+
 ### Documentation
 
 - Documented the Slack mobile `markdown` block limitation where list-item continuation lines are re-prefixed with the list marker, and linked the tracking issue so users can check upstream status instead of expecting a parser-side workaround.

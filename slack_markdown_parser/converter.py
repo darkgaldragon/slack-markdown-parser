@@ -9,6 +9,7 @@ from __future__ import annotations
 import html
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 ZWSP = "\u200b"
 NBSP = "\u00a0"
@@ -24,6 +25,11 @@ CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]")
 SLACK_ANGLE_TOKEN_PATTERN = re.compile(r"<[^>\n]+>")
 BARE_URL_PATTERN = re.compile(r"https?://[^\s<]+", re.IGNORECASE)
 FENCE_OPEN_PATTERN = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})([^\n]*)$")
+STANDALONE_IMAGE_PATTERN = re.compile(
+    r"^[ \t]*!\[(?P<alt>[^\]\n]*)\]\((?P<url>https?://[^\s)]+)"
+    r"(?:[ \t]+(?P<title>\"[^\"\n]*\"|'[^'\n]*'))?[ \t]*\)[ \t]*$",
+    re.IGNORECASE,
+)
 MARKDOWN_LINK_PATTERN = re.compile(r"\[[^\]\n]+\]\([^\)\n]+\)")
 INLINE_CODE_SPAN_PATTERN = re.compile(r"(?<!`)`[^`\n]+`(?!`)", flags=re.DOTALL)
 EMPHASIS_PATTERNS = (
@@ -48,6 +54,8 @@ THEMATIC_BREAK_PATTERN = re.compile(
 LIST_ITEM_PATTERN = re.compile(
     r"^(?P<indent>[ \t]*)(?P<marker>\d+[.)]|[-+*])(?P<spacing>[ \t]+|$)"
 )
+TASK_LIST_MARKER_PATTERN = re.compile(r"^\[[ xX]\](?:[ \t]+|$)")
+MARKDOWN_BACKSLASH_ESCAPE_PATTERN = re.compile(r"\\[\\`*_{}\[\]()#+\-.!>|]")
 DOUBLE_UNDERSCORE_EMPHASIS_PATTERN = re.compile(
     r"(?<![\\0-9A-Za-z_])__(?=\S)(.+?\S)__(?![0-9A-Za-z_])"
 )
@@ -78,6 +86,7 @@ ALLOWED_SLACK_ANGLE_TOKEN_PATTERNS = (
     re.compile(r"^<!subteam\^[A-Z0-9]+(?:\|[^>\n]+)?>$"),
     re.compile(r"^<!date\^[^>\n]+>$"),
 )
+SLACK_MAX_BLOCKS_PER_MESSAGE = 50
 
 
 def decode_html_entities(text: str) -> str:
@@ -208,6 +217,31 @@ def _list_item_content_indent(match: re.Match[str]) -> int:
 
 def _is_ordered_list_marker(marker: str) -> bool:
     return bool(marker) and marker[0].isdigit()
+
+
+def _ordered_list_marker_number(marker: str) -> int:
+    if not _is_ordered_list_marker(marker):
+        return 1
+    try:
+        return int(marker[:-1])
+    except ValueError:
+        return 1
+
+
+def _list_indent_level(indent: str) -> int:
+    width = _indent_width(indent or "")
+    if width <= 3:
+        return 0
+    return min(8, ((width - 4) // 4) + 1)
+
+
+def _is_ambiguous_rich_list_indent(indent: str) -> bool:
+    width = _indent_width(indent or "")
+    return 0 < width <= 3
+
+
+def _has_markdown_backslash_escape(text: str) -> bool:
+    return bool(MARKDOWN_BACKSLASH_ESCAPE_PATTERN.search(text or ""))
 
 
 def _is_thematic_break_line(line: str) -> bool:
@@ -1146,12 +1180,15 @@ def looks_like_markdown_table(text: str) -> bool:
     return table_like_lines >= 2
 
 
-def _create_table_cell(text: str) -> dict[str, Any]:
-    """Build Slack rich_text cell from markdown fragment."""
+def _create_rich_text_inline_elements(
+    text: str, *, empty_text: str = ""
+) -> list[dict[str, Any]]:
+    """Build Slack rich text inline elements from a small markdown fragment."""
     clean_text = strip_zero_width_spaces(text or "")
     clean_text = clean_text.replace("\\|", "|")
     if not clean_text.strip():
-        clean_text = "-"
+        clean_text = empty_text
+
     elements: list[dict[str, Any]] = []
     last_index = 0
 
@@ -1207,9 +1244,21 @@ def _create_table_cell(text: str) -> dict[str, Any]:
     if not elements:
         elements.append({"type": "text", "text": clean_text})
 
+    return elements
+
+
+def _create_rich_text_section(text: str, *, empty_text: str = "") -> dict[str, Any]:
+    return {
+        "type": "rich_text_section",
+        "elements": _create_rich_text_inline_elements(text, empty_text=empty_text),
+    }
+
+
+def _create_table_cell(text: str) -> dict[str, Any]:
+    """Build Slack rich_text cell from markdown fragment."""
     return {
         "type": "rich_text",
-        "elements": [{"type": "rich_text_section", "elements": elements}],
+        "elements": [_create_rich_text_section(text, empty_text="-")],
     }
 
 
@@ -1272,6 +1321,419 @@ def markdown_table_to_slack_table(table_markdown: str) -> dict[str, Any] | None:
 
 # Backward-compatible alias
 markdown_table_to_table_block = markdown_table_to_slack_table
+
+
+def _truncate_plain_text(text: str, max_length: int) -> str:
+    if len(text) <= max_length:
+        return text
+    return text[: max_length - 1].rstrip() + "…"
+
+
+def _is_http_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _rich_text_inline_elements_to_plain_text(elements: list[dict[str, Any]]) -> str:
+    texts: list[str] = []
+    for element in elements or []:
+        if not isinstance(element, dict):
+            continue
+        element_type = element.get("type")
+        if element_type == "link":
+            texts.append(str(element.get("text") or element.get("url", "")))
+        else:
+            texts.append(str(element.get("text", "")))
+    return "".join(texts)
+
+
+def _rich_text_object_to_plain_text(element: dict[str, Any]) -> str:
+    element_type = element.get("type")
+    if element_type == "rich_text_section":
+        return _rich_text_inline_elements_to_plain_text(element.get("elements", []))
+    if element_type in {"rich_text_preformatted", "rich_text_quote"}:
+        return _rich_text_inline_elements_to_plain_text(element.get("elements", []))
+    if element_type == "rich_text_list":
+        style = element.get("style")
+        indent = max(0, int(element.get("indent") or 0))
+        offset = max(0, int(element.get("offset") or 0))
+        prefix = "  " * indent
+        lines: list[str] = []
+        for idx, child in enumerate(element.get("elements", []), start=1):
+            if not isinstance(child, dict):
+                continue
+            child_text = _rich_text_object_to_plain_text(child).strip()
+            if not child_text:
+                continue
+            marker = f"{offset + idx}." if style == "ordered" else "-"
+            lines.append(f"{prefix}{marker} {child_text}")
+        return "\n".join(lines)
+    return ""
+
+
+def _rich_text_block_to_plain_text(block: dict[str, Any]) -> str:
+    annotated_plain_text = getattr(block, "_plain_text", None)
+    if annotated_plain_text:
+        return str(annotated_plain_text).strip()
+
+    parts = [
+        _rich_text_object_to_plain_text(element)
+        for element in block.get("elements", [])
+        if isinstance(element, dict)
+    ]
+    return "\n".join(part for part in parts if part).strip()
+
+
+def _plain_text_from_markdown_fragment(text: str) -> str:
+    return _rich_text_inline_elements_to_plain_text(
+        _create_rich_text_inline_elements(text)
+    ).strip()
+
+
+def _create_markdown_block(
+    content: str, *, preserve_visual_blank_lines: bool = False
+) -> dict[str, Any] | None:
+    formatted, synthetic_indices = _format_markdown_with_spacing_metadata(content)
+    plain_text = _build_markdown_block_plain_text(formatted, synthetic_indices)
+    synthetic_blank_line_indices: list[int] = []
+    if preserve_visual_blank_lines:
+        formatted, synthetic_blank_line_indices = (
+            _inject_visual_blank_line_placeholders(formatted)
+        )
+    if not formatted.strip():
+        return None
+
+    block = _AnnotatedSlackBlock({"type": "markdown", "text": formatted})
+    block._plain_text = plain_text
+    block._synthetic_space_indices = synthetic_indices
+    block._synthetic_blank_line_indices = synthetic_blank_line_indices
+    return block
+
+
+def _create_rich_text_block(
+    elements: list[dict[str, Any]], *, plain_text: str | None = None
+) -> dict[str, Any]:
+    block = _AnnotatedSlackBlock({"type": "rich_text", "elements": elements})
+    if plain_text is not None:
+        block._plain_text = plain_text
+    return block
+
+
+def _create_image_block_from_line(line: str) -> dict[str, Any] | None:
+    match = STANDALONE_IMAGE_PATTERN.match(line)
+    if not match:
+        return None
+
+    image_url = match.group("url").strip()
+    if not _is_http_url(image_url) or len(image_url) > 3000:
+        return None
+
+    alt_text = _plain_text_from_markdown_fragment(match.group("alt") or "")
+    alt_text = _truncate_plain_text(alt_text or "Image", 2000)
+    return {"type": "image", "image_url": image_url, "alt_text": alt_text}
+
+
+def _is_setext_heading_underline(lines: list[str], index: int) -> bool:
+    if index <= 0:
+        return False
+    line = lines[index].strip()
+    if not line or set(line) != {"-"}:
+        return False
+    return bool(lines[index - 1].strip())
+
+
+def _create_divider_block_from_line(
+    lines: list[str], index: int
+) -> dict[str, Any] | None:
+    if not _is_thematic_break_line(lines[index]):
+        return None
+    if _is_setext_heading_underline(lines, index):
+        return None
+    block = _AnnotatedSlackBlock({"type": "divider"})
+    block._plain_text = lines[index].strip()
+    return block
+
+
+def _strip_quote_marker(line: str) -> str | None:
+    match = re.match(r"^[ \t]{0,3}>[ \t]?(?P<text>.*)$", line)
+    if not match:
+        return None
+    return match.group("text")
+
+
+def _quote_lines_are_simple(lines: list[str]) -> bool:
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            return False
+        if stripped.startswith(">"):
+            return False
+        if LIST_ITEM_PATTERN.match(stripped):
+            return False
+        if _match_fence_open(stripped):
+            return False
+        if _has_markdown_backslash_escape(stripped):
+            return False
+    return True
+
+
+def _consume_quote_block(
+    lines: list[str], start: int
+) -> tuple[dict[str, Any], int] | None:
+    if _strip_quote_marker(lines[start]) is None:
+        return None
+
+    quote_lines: list[str] = []
+    cursor = start
+    while cursor < len(lines):
+        stripped = _strip_quote_marker(lines[cursor])
+        if stripped is None:
+            break
+        quote_lines.append(stripped)
+        cursor += 1
+
+    if not _quote_lines_are_simple(quote_lines):
+        return None
+
+    quote_text = "\n".join(quote_lines).strip()
+    if not quote_text:
+        return None
+
+    block = _create_rich_text_block(
+        [
+            {
+                "type": "rich_text_quote",
+                "elements": _create_rich_text_inline_elements(quote_text),
+            }
+        ],
+        plain_text="\n".join(lines[start:cursor]),
+    )
+    return block, cursor
+
+
+def _parse_simple_list_item(line: str) -> dict[str, Any] | None:
+    if _is_thematic_break_line(line):
+        return None
+
+    match = LIST_ITEM_PATTERN.match(line)
+    if not match:
+        return None
+
+    text = line[match.end() :].rstrip()
+    if TASK_LIST_MARKER_PATTERN.match(text):
+        return None
+
+    indent = match.group("indent") or ""
+    if _is_ambiguous_rich_list_indent(indent):
+        return None
+    if _has_markdown_backslash_escape(text):
+        return None
+
+    marker = match.group("marker")
+    return {
+        "style": "ordered" if _is_ordered_list_marker(marker) else "bullet",
+        "number": _ordered_list_marker_number(marker),
+        "indent": _list_indent_level(indent),
+        "text": text.strip() or " ",
+    }
+
+
+def _consume_list_block(
+    lines: list[str], start: int
+) -> tuple[dict[str, Any], int] | None:
+    first_entry = _parse_simple_list_item(lines[start])
+    if first_entry is None:
+        return None
+
+    first_match = LIST_ITEM_PATTERN.match(lines[start])
+    first_indent = _indent_width(first_match.group("indent") if first_match else "")
+    if first_indent > 3:
+        return None
+
+    if start > 0 and lines[start - 1].strip():
+        return None
+
+    entries: list[dict[str, Any]] = []
+    cursor = start
+    while cursor < len(lines) and lines[cursor].strip():
+        entry = _parse_simple_list_item(lines[cursor])
+        if entry is None:
+            return None
+        entries.append(entry)
+        cursor += 1
+
+    if not entries:
+        return None
+
+    lookahead = cursor
+    while lookahead < len(lines) and not lines[lookahead].strip():
+        lookahead += 1
+    if lookahead < len(lines):
+        next_line = lines[lookahead]
+        if _indent_width(next_line) > 0 and _parse_simple_list_item(next_line) is None:
+            return None
+
+    rich_elements: list[dict[str, Any]] = []
+    current_group: dict[str, Any] | None = None
+
+    def flush_group() -> None:
+        nonlocal current_group
+        if current_group:
+            rich_elements.append(current_group)
+        current_group = None
+
+    for entry in entries:
+        group_key = (entry["style"], entry["indent"])
+        if current_group is None or current_group["_key"] != group_key:
+            flush_group()
+            current_group = {
+                "type": "rich_text_list",
+                "style": entry["style"],
+                "indent": entry["indent"],
+                "elements": [],
+                "_key": group_key,
+            }
+            if entry["style"] == "ordered" and entry["number"] > 1:
+                current_group["offset"] = entry["number"] - 1
+
+        current_group["elements"].append(_create_rich_text_section(entry["text"]))
+
+    flush_group()
+    for element in rich_elements:
+        element.pop("_key", None)
+
+    return (
+        _create_rich_text_block(
+            rich_elements,
+            plain_text="\n".join(lines[start:cursor]),
+        ),
+        cursor,
+    )
+
+
+def _find_fence_close_index(
+    lines: list[str], start: int, fence: tuple[str, int]
+) -> int | None:
+    cursor = start + 1
+    while cursor < len(lines):
+        if _is_fence_close(lines[cursor], fence):
+            return cursor
+        cursor += 1
+    return None
+
+
+def _consume_fenced_code_block(
+    lines: list[str], start: int
+) -> tuple[dict[str, Any], int] | None:
+    open_match = FENCE_OPEN_PATTERN.match(lines[start])
+    if not open_match:
+        return None
+
+    fence = _match_fence_open(lines[start])
+    if fence is None:
+        return None
+
+    close_index = _find_fence_close_index(lines, start, fence)
+    if close_index is None:
+        return None
+
+    info = (open_match.group(2) or "").strip()
+    language = info.split()[0] if info else ""
+    code_text = "\n".join(lines[start + 1 : close_index])
+    preformatted: dict[str, Any] = {
+        "type": "rich_text_preformatted",
+        "elements": [{"type": "text", "text": code_text}],
+    }
+    if language and re.match(r"^[A-Za-z0-9_+.#-]+$", language):
+        preformatted["language"] = language
+    return (
+        _create_rich_text_block(
+            [preformatted],
+            plain_text="\n".join(lines[start : close_index + 1]),
+        ),
+        close_index + 1,
+    )
+
+
+def _consume_rich_markdown_block(
+    lines: list[str], index: int
+) -> tuple[dict[str, Any], int] | None:
+    if not lines[index].strip():
+        return None
+
+    consumers = (
+        lambda: _consume_fenced_code_block(lines, index),
+        lambda: (
+            (block, index + 1)
+            if (block := _create_image_block_from_line(lines[index]))
+            else None
+        ),
+        lambda: (
+            (block, index + 1)
+            if (block := _create_divider_block_from_line(lines, index))
+            else None
+        ),
+        lambda: _consume_quote_block(lines, index),
+        lambda: _consume_list_block(lines, index),
+    )
+
+    for consumer in consumers:
+        consumed = consumer()
+        if consumed:
+            return consumed
+    return None
+
+
+def _convert_markdown_text_segment_to_blocks(
+    content: str, *, preserve_visual_blank_lines: bool = False
+) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = []
+    markdown_buffer: list[str] = []
+    lines = content.splitlines()
+    cursor = 0
+
+    def flush_markdown_buffer() -> None:
+        nonlocal markdown_buffer
+        if not markdown_buffer:
+            return
+        while markdown_buffer and not markdown_buffer[0].strip():
+            markdown_buffer.pop(0)
+        while markdown_buffer and not markdown_buffer[-1].strip():
+            markdown_buffer.pop()
+        if not markdown_buffer:
+            return
+        markdown_block = _create_markdown_block(
+            "\n".join(markdown_buffer),
+            preserve_visual_blank_lines=preserve_visual_blank_lines,
+        )
+        if markdown_block:
+            blocks.append(markdown_block)
+        markdown_buffer = []
+
+    while cursor < len(lines):
+        fence = _match_fence_open(lines[cursor])
+        if fence is not None and _find_fence_close_index(lines, cursor, fence) is None:
+            markdown_buffer.extend(lines[cursor:])
+            cursor = len(lines)
+            break
+
+        consumed = _consume_rich_markdown_block(lines, cursor)
+        if consumed:
+            flush_markdown_buffer()
+            block, cursor = consumed
+            blocks.append(block)
+            while cursor < len(lines) and not lines[cursor].strip():
+                cursor += 1
+            continue
+
+        markdown_buffer.append(lines[cursor])
+        cursor += 1
+
+    flush_markdown_buffer()
+    return blocks
 
 
 def split_markdown_into_segments(markdown_text: str) -> list[dict[str, str]]:
@@ -1352,19 +1814,12 @@ def convert_markdown_to_slack_blocks(
                 blocks.append(table_block)
                 continue
 
-        formatted, synthetic_indices = _format_markdown_with_spacing_metadata(content)
-        plain_text = _build_markdown_block_plain_text(formatted, synthetic_indices)
-        synthetic_blank_line_indices: list[int] = []
-        if preserve_visual_blank_lines:
-            formatted, synthetic_blank_line_indices = (
-                _inject_visual_blank_line_placeholders(formatted)
+        blocks.extend(
+            _convert_markdown_text_segment_to_blocks(
+                content,
+                preserve_visual_blank_lines=preserve_visual_blank_lines,
             )
-        if formatted.strip():
-            block = _AnnotatedSlackBlock({"type": "markdown", "text": formatted})
-            block._plain_text = plain_text
-            block._synthetic_space_indices = synthetic_indices
-            block._synthetic_blank_line_indices = synthetic_blank_line_indices
-            blocks.append(block)
+        )
 
     return blocks
 
@@ -1374,7 +1829,7 @@ convert_markdown_text_to_blocks = convert_markdown_to_slack_blocks
 
 
 def split_blocks_by_table(blocks: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-    """Split blocks into multiple messages to satisfy one-table-per-message constraint."""
+    """Split blocks to satisfy Slack table and per-message block constraints."""
     messages: list[list[dict[str, Any]]] = []
     current_message: list[dict[str, Any]] = []
 
@@ -1385,6 +1840,9 @@ def split_blocks_by_table(blocks: list[dict[str, Any]]) -> list[list[dict[str, A
             messages.append([block])
             current_message = []
         else:
+            if len(current_message) >= SLACK_MAX_BLOCKS_PER_MESSAGE:
+                messages.append(current_message)
+                current_message = []
             current_message.append(block)
 
     if current_message:
@@ -1457,6 +1915,24 @@ def blocks_to_plain_text(blocks: list[dict[str, Any]]) -> str:
                         cell_texts.append(strip_zero_width_spaces(cell_text))
                 if cell_texts:
                     parts.append(" | ".join(cell_texts))
+        elif block_type == "rich_text":
+            text = _rich_text_block_to_plain_text(block)
+            if text:
+                parts.append(text)
+        elif block_type == "header":
+            text = block.get("text", {})
+            if isinstance(text, dict) and text.get("text"):
+                parts.append(str(text.get("text", "")))
+        elif block_type == "image":
+            alt_text = str(block.get("alt_text", "")).strip()
+            image_url = str(block.get("image_url", "")).strip()
+            image_text = alt_text or image_url
+            if alt_text and image_url:
+                image_text = f"{alt_text} ({image_url})"
+            if image_text:
+                parts.append(image_text)
+        elif block_type == "divider":
+            parts.append(getattr(block, "_plain_text", None) or "---")
         elif isinstance(block, dict):
             text = block.get("text", "")
             if text:
@@ -1497,6 +1973,24 @@ def build_fallback_text_from_blocks(blocks: list[dict[str, Any]]) -> str:
                     table_lines.append(" | ".join(cells))
             if table_lines:
                 plain_parts.append("\n".join(table_lines))
+        elif block.get("type") == "rich_text":
+            text = _rich_text_block_to_plain_text(block)
+            if text.strip():
+                plain_parts.append(text)
+        elif block.get("type") == "header":
+            text = block.get("text", {})
+            if isinstance(text, dict) and text.get("text"):
+                plain_parts.append(str(text.get("text", "")))
+        elif block.get("type") == "image":
+            alt_text = str(block.get("alt_text", "")).strip()
+            image_url = str(block.get("image_url", "")).strip()
+            image_text = alt_text or image_url
+            if alt_text and image_url:
+                image_text = f"{alt_text} ({image_url})"
+            if image_text:
+                plain_parts.append(image_text)
+        elif block.get("type") == "divider":
+            plain_parts.append(getattr(block, "_plain_text", None) or "---")
 
     return "\n\n".join([part for part in plain_parts if part.strip()])
 

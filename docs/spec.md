@@ -9,13 +9,13 @@ This document describes how `slack-markdown-parser` converts Markdown into Slack
 
 ## Output
 
-- Slack Block Kit blocks (`markdown` / `table`)
-- When the input contains multiple tables, a list of messages that satisfies the "one table per message" rule
+- Slack Block Kit blocks (`markdown`, `table`, `rich_text`, `image`, and `divider`)
+- When the input contains multiple tables or many promoted blocks, a list of messages that satisfies the "one table per message" rule and Slack's per-message block-count limit
 
 ## Design target
 
 This parser does not try to reproduce full CommonMark, HTML, or rich-document rendering.
-Its goal is to produce Slack messages that read naturally when delivered through Slack Block Kit `markdown` and `table` blocks.
+Its goal is to produce Slack messages that read naturally when delivered through Slack Block Kit blocks.
 
 When exact Markdown fidelity conflicts with Slack readability, readable Slack output takes priority.
 
@@ -31,10 +31,10 @@ When exact Markdown fidelity conflicts with Slack readability, readable Slack ou
 6. Split the text into table regions and non-table regions
 7. Build blocks for each region:
    - Table regions: parse inline cell styling and generate a `table` block. If conversion fails, such as when there are fewer than two candidate lines or the parse result is empty, fall back to a `markdown` block.
-   - Non-table regions: add zero-width spaces where needed and generate a `markdown` block.
-   - If `preserve_visual_blank_lines=True`, replace internal blank lines in non-table regions with lines that contain only a non-breaking space before emitting the `markdown` block.
+   - Non-table regions: first promote safe standalone Markdown constructs into richer Block Kit blocks, then add zero-width spaces where needed and generate `markdown` blocks for the remaining text.
+   - If `preserve_visual_blank_lines=True`, replace internal blank lines in remaining `markdown` blocks with lines that contain only a non-breaking space before emitting the `markdown` block.
 
-`convert_markdown_to_slack_messages` then splits the resulting block list to satisfy the "one table per message" rule.
+`convert_markdown_to_slack_messages` then splits the resulting block list to satisfy the "one table per message" rule and Slack's per-message block-count limit.
 `convert_markdown_to_slack_payloads` returns the same split blocks plus preview `text` values ready for `chat.postMessage`.
 
 ## How Slack behaved in testing
@@ -49,6 +49,7 @@ The behaviors below are based on practical validation against real Slack clients
 - Bare URLs, `<https://...>` style links, Markdown links, reference-style links, and mailto links
 - Bullet lists, ordered lists, task lists, and simple one-level blockquotes
 - Slack `table` blocks
+- Native richer blocks generated from unambiguous standalone Markdown constructs
 
 Slack published updated `markdown` block documentation and a changelog entry on March 6, 2026. In the Slack Web workspace validated for this project on April 8, 2026, raw `markdown` blocks rendered:
 
@@ -73,6 +74,13 @@ Slack still controls when those newer features appear and how they look, so trea
 - `_..._` and `__...__` are normalized into Slack-friendly `*...*` and `**...**`
 - Bare URLs are wrapped into Slack-friendly `<https://...>` form before `markdown` block delivery
 - Malformed Markdown tables are repaired before `table` block generation
+- Unambiguous standalone Markdown constructs are promoted into native Slack blocks:
+  - standalone image syntax `![alt](https://...)` to `image`
+  - thematic-break lines to `divider`
+  - fenced code blocks to `rich_text_preformatted`
+  - simple one-level quotes to `rich_text_quote`
+  - simple bullet and ordered lists to `rich_text_list`
+    - Lists are promoted only when the list starts at the beginning of the text region or after a blank line, each non-blank line in the run is a list item, the list does not use ambiguous 1-3-space nested indentation, the item text does not rely on Markdown backslash escapes, and the run is not followed by an indented continuation paragraph.
 - Table-like rows inside fenced code blocks are kept out of table parsing
 - Internal blank lines can optionally be rewritten into placeholder lines so Slack keeps visible paragraph separation
 - Unsupported Slack angle-bracket tokens such as `<foo>` or raw HTML-like tags are neutralized
