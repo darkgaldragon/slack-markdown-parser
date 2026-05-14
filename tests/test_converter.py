@@ -24,6 +24,70 @@ def _first_table(blocks: list[dict]) -> dict:
     return next(block for block in blocks if block.get("type") == "table")
 
 
+def test_common_markdown_blocks_convert_to_rich_block_kit_blocks() -> None:
+    raw = """# Rich sample
+
+![Generated chart](https://example.com/chart.png)
+
+> Warning: Check the threshold
+
+> quoted **line**
+
+- alpha
+- beta
+
+```python
+print("ok")
+```
+"""
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert [block["type"] for block in blocks] == [
+        "markdown",
+        "image",
+        "rich_text",
+        "rich_text",
+        "rich_text",
+        "rich_text",
+    ]
+    assert blocks[0]["text"] == "# Rich sample"
+    assert blocks[1]["image_url"] == "https://example.com/chart.png"
+    assert blocks[1]["alt_text"] == "Generated chart"
+    assert blocks[2]["elements"][0]["type"] == "rich_text_quote"
+    assert blocks[3]["elements"][0]["type"] == "rich_text_quote"
+    assert blocks[4]["elements"][0]["type"] == "rich_text_list"
+    assert blocks[5]["elements"][0]["type"] == "rich_text_preformatted"
+    assert blocks[5]["elements"][0]["language"] == "python"
+    assert "![Generated chart]" not in build_fallback_text_from_blocks(blocks)
+
+
+def test_unclosed_fenced_code_remains_markdown_without_rich_promotions() -> None:
+    raw = """```python
+![Generated chart](https://example.com/chart.png)
+---
+- item
+> quote"""
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert [block["type"] for block in blocks] == ["markdown"]
+    assert build_fallback_text_from_blocks(blocks) == raw
+
+
+def test_callout_quote_uses_supported_rich_text_quote() -> None:
+    blocks = convert_markdown_to_slack_blocks(
+        "> [!NOTE]\n> This is an admonition-like block."
+    )
+
+    assert len(blocks) == 1
+    assert blocks[0]["type"] == "rich_text"
+    assert blocks[0]["elements"][0]["type"] == "rich_text_quote"
+    assert blocks[0]["elements"][0]["elements"][0]["text"] == (
+        "[!NOTE]\nThis is an admonition-like block."
+    )
+
+
 def test_normalize_adds_outer_pipes_and_separator() -> None:
     raw = """カテゴリ | 枠1 | 枠2 | 枠3
 ---|---|---|---
@@ -164,7 +228,12 @@ def test_preserve_visual_blank_lines_skips_fenced_code_blocks() -> None:
         preserve_visual_blank_lines=True,
     )
 
-    assert blocks[0]["text"] == "```python\nprint(1)\n\nprint(2)\n```\n\nAfter"
+    assert blocks[0]["type"] == "rich_text"
+    preformatted = blocks[0]["elements"][0]
+    assert preformatted["type"] == "rich_text_preformatted"
+    assert preformatted["language"] == "python"
+    assert preformatted["elements"][0]["text"] == "print(1)\n\nprint(2)"
+    assert blocks[1]["text"] == "After"
     assert (
         build_fallback_text_from_blocks(blocks)
         == "```python\nprint(1)\n\nprint(2)\n```\n\nAfter"
@@ -201,7 +270,9 @@ def test_preserve_visual_blank_lines_skips_blank_after_ordered_list() -> None:
         preserve_visual_blank_lines=True,
     )[0]
 
-    assert payload["blocks"][0]["text"] == "1. first\n2. second\n\nAfter"
+    assert payload["blocks"][0]["type"] == "rich_text"
+    assert payload["blocks"][0]["elements"][0]["type"] == "rich_text_list"
+    assert payload["blocks"][1]["text"] == "After"
     assert payload["text"] == "1. first\n2. second\n\nAfter"
 
 
@@ -223,7 +294,9 @@ def test_preserve_visual_blank_lines_skips_blank_after_nested_ordered_list() -> 
         preserve_visual_blank_lines=True,
     )[0]
 
-    assert payload["blocks"][0]["text"] == "1. first\n    1. nested\n\nAfter"
+    assert payload["blocks"][0]["type"] == "rich_text"
+    assert [element["indent"] for element in payload["blocks"][0]["elements"]] == [0, 1]
+    assert payload["blocks"][1]["text"] == "After"
     assert payload["text"] == "1. first\n    1. nested\n\nAfter"
 
 
@@ -296,7 +369,12 @@ def test_preserve_visual_blank_lines_keeps_blank_after_ordered_list_starting_at_
         preserve_visual_blank_lines=True,
     )[0]
 
-    assert payload["blocks"][0]["text"] == "Intro\n\u00a0\n2. step\n\nAfter"
+    assert [block["type"] for block in payload["blocks"]] == [
+        "markdown",
+        "rich_text",
+        "markdown",
+    ]
+    assert payload["blocks"][1]["elements"][0]["offset"] == 1
     assert payload["text"] == "Intro\n\n2. step\n\nAfter"
 
 
@@ -306,21 +384,27 @@ def test_preserve_visual_blank_lines_still_rewrites_blank_before_ordered_list() 
         preserve_visual_blank_lines=True,
     )[0]
 
-    assert payload["blocks"][0]["text"] == "Intro\n\u00a0\n1. first\n2. second"
+    assert [block["type"] for block in payload["blocks"]] == ["markdown", "rich_text"]
     assert payload["text"] == "Intro\n\n1. first\n2. second"
 
 
-def test_preserve_visual_blank_lines_rewrites_blank_after_dash_thematic_break() -> None:
+def test_preserve_visual_blank_lines_promotes_dash_thematic_break_to_divider_block() -> (
+    None
+):
     payload = convert_markdown_to_slack_payloads(
         "Intro\n- - -\n\nAfter",
         preserve_visual_blank_lines=True,
     )[0]
 
-    assert payload["blocks"][0]["text"] == "Intro\n- - -\n\u00a0\nAfter"
-    assert payload["text"] == "Intro\n- - -\n\nAfter"
+    assert [block["type"] for block in payload["blocks"]] == [
+        "markdown",
+        "divider",
+        "markdown",
+    ]
+    assert payload["text"] == "Intro\n\n- - -\n\nAfter"
 
 
-def test_preserve_visual_blank_lines_rewrites_blank_after_asterisk_thematic_break() -> (
+def test_preserve_visual_blank_lines_promotes_asterisk_thematic_break_to_divider_block() -> (
     None
 ):
     payload = convert_markdown_to_slack_payloads(
@@ -328,8 +412,12 @@ def test_preserve_visual_blank_lines_rewrites_blank_after_asterisk_thematic_brea
         preserve_visual_blank_lines=True,
     )[0]
 
-    assert payload["blocks"][0]["text"] == "Intro\n* * *\n\u00a0\nAfter"
-    assert payload["text"] == "Intro\n* * *\n\nAfter"
+    assert [block["type"] for block in payload["blocks"]] == [
+        "markdown",
+        "divider",
+        "markdown",
+    ]
+    assert payload["text"] == "Intro\n\n* * *\n\nAfter"
 
 
 def test_preserve_visual_blank_lines_handles_corpus_sensitive_boundaries() -> None:
@@ -859,8 +947,10 @@ inside code fence, not a table
     blocks = convert_markdown_to_slack_blocks(raw)
 
     assert len(blocks) == 1
-    assert blocks[0]["type"] == "markdown"
-    assert "a | b | c" in blocks[0]["text"]
+    assert blocks[0]["type"] == "rich_text"
+    preformatted = blocks[0]["elements"][0]
+    assert preformatted["type"] == "rich_text_preformatted"
+    assert "a | b | c" in preformatted["elements"][0]["text"]
 
 
 def test_tilde_code_fence_stays_markdown() -> None:
@@ -873,8 +963,14 @@ where id = 1;
     blocks = convert_markdown_to_slack_blocks(raw)
 
     assert len(blocks) == 1
-    assert blocks[0]["type"] == "markdown"
-    assert blocks[0]["text"] == raw
+    assert blocks[0]["type"] == "rich_text"
+    preformatted = blocks[0]["elements"][0]
+    assert preformatted["type"] == "rich_text_preformatted"
+    assert preformatted["language"] == "sql"
+    assert preformatted["elements"][0]["text"] == (
+        "select *\nfrom users\nwhere id = 1;"
+    )
+    assert build_fallback_text_from_blocks(blocks) == raw
 
 
 def test_escaped_pipe_in_table_cell_strips_backslash() -> None:
