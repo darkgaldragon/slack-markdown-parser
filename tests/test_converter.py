@@ -1081,6 +1081,34 @@ def test_scheme_url_in_bold_before_cjk_keeps_bold_closed() -> None:
     assert "**\u200b" not in block_text
 
 
+def test_bare_url_preserves_cjk_iri_path() -> None:
+    # Codex review on #54: CJK *letters* are legal in an IRI path / IDN host,
+    # so the trim must not cut there (only CJK punctuation and emphasis runs are
+    # boundaries). A Japanese Wikipedia URL must stay intact.
+    assert (
+        normalize_bare_urls_for_slack_markdown(
+            "詳細は https://ja.wikipedia.org/wiki/日本語 を参照"
+        )
+        == "詳細は <https://ja.wikipedia.org/wiki/日本語> を参照"
+    )
+    assert (
+        normalize_bare_urls_for_slack_markdown("https://日本語.example.com/path")
+        == "<https://日本語.example.com/path>"
+    )
+
+
+def test_bare_url_preserves_single_asterisk_in_query() -> None:
+    # Codex review on #54: a lone ``*`` is legal in a URL path/query (wildcards),
+    # so only a doubled ``**`` emphasis run is a boundary. The link target must
+    # not be truncated at the asterisk.
+    assert (
+        normalize_bare_urls_for_slack_markdown(
+            "検索 https://example.com/search?q=a*b です"
+        )
+        == "検索 <https://example.com/search?q=a*b> です"
+    )
+
+
 def test_slack_link_in_table_cell_keeps_single_cell() -> None:
     raw = """| Name | Link |
 |---|---|

@@ -143,44 +143,40 @@ def _is_han_or_kana_char(char: str) -> bool:
     )
 
 
-# Characters that can never be part of a bare URL in this library's prose
-# context: emphasis/code markers and angle/pipe tokens used by Slack markup.
-_URL_STOP_CHARS = frozenset("*`<>|")
-# Trailing ASCII punctuation that, GFM-style, belongs to the surrounding prose
-# rather than the URL (a closing paren is handled separately, with balancing).
-_URL_TRAILING_PUNCTUATION = frozenset(".,;:!?\"'")
+# Code/angle/pipe markers that never appear inside a bare URL in this library's
+# prose context. (A single ``*`` and CJK letters are intentionally NOT here: a
+# URL may legally contain a wildcard/query ``*`` and an IRI/IDN may contain CJK
+# letters, so those must be preserved.)
+_URL_STOP_CHARS = frozenset("`<>|")
+# Trailing punctuation that, GFM-style, belongs to the surrounding prose rather
+# than the URL (a closing paren is handled separately, with balancing).
+_URL_TRAILING_PUNCTUATION = frozenset(".,;:!?\"'*~_")
 
 
 def _is_url_boundary_char(char: str) -> bool:
-    """Return True when ``char`` marks where a bare URL must stop.
+    """Return True when ``char`` is a hard boundary where a bare URL must stop.
 
-    A bare URL is cut at emphasis/code/angle markers and at CJK letters or
-    punctuation. In CJK writing a URL is usually glued directly to the
-    following text with no whitespace, so a greedy ``[^\\s<]+`` match would
-    otherwise swallow the trailing ``)``/``**``/``、``/``。`` and the rest of
-    the sentence into the autolink.
+    Only unambiguous prose/markup boundaries qualify: code/angle/pipe markers
+    and CJK *punctuation* (``、``/``。``/``」`` …). CJK *letters* are not a
+    boundary, so IRIs such as ``https://ja.wikipedia.org/wiki/日本語`` survive.
     """
-    if char in _URL_STOP_CHARS:
-        return True
-    codepoint = ord(char)
-    return (
-        _is_han_or_kana_char(char)
-        or _is_hangul_char(char)
-        or 0x3000 <= codepoint <= 0x303F  # CJK symbols and punctuation (、。「」…)
-        or 0xFF00 <= codepoint <= 0xFFEF  # full-width / half-width forms (）！…)
-    )
+    return char in _URL_STOP_CHARS or 0x3000 <= ord(char) <= 0x303F
 
 
 def _trim_bare_url(url: str) -> str:
     """Trim a greedily matched bare URL down to its real extent.
 
-    Stops the URL at the first prose/markup boundary character and then drops
-    trailing punctuation (and unbalanced closing parens) the way GFM's
-    autolink extension does, so ``https://example.com)**、`` becomes
-    ``https://example.com``.
+    In CJK writing a URL is usually glued directly to the following text with no
+    whitespace, so the greedy ``[^\\s<]+`` match would otherwise swallow the
+    trailing ``)``/``**``/``。`` and the rest of the sentence. This stops the URL
+    at the first hard boundary or doubled emphasis run (``**``/``~~``) — single
+    ``*`` and CJK letters are preserved — then drops GFM-style trailing
+    punctuation and unbalanced closing parens, so ``https://example.com)**。``
+    becomes ``https://example.com``.
     """
     for index, char in enumerate(url):
-        if _is_url_boundary_char(char):
+        nxt = url[index + 1] if index + 1 < len(url) else ""
+        if _is_url_boundary_char(char) or (char in "*~" and nxt == char):
             url = url[:index]
             break
 
