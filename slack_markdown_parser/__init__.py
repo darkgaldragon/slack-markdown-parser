@@ -1,6 +1,6 @@
 """slack-markdown-parser public package API."""
 
-__version__ = "2.4.2"
+__version__ = "2.4.3"
 __license__ = "MIT"
 
 from .converter import (
