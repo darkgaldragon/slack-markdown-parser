@@ -1109,6 +1109,19 @@ def test_bare_url_preserves_single_asterisk_in_query() -> None:
     )
 
 
+def test_bare_url_keeps_url_legal_semicolon_but_trims_sentence_period() -> None:
+    # Codex review on #54: `;` is URL-legal (matrix/path parameters) and must be
+    # kept, while a sentence-final ASCII period is trimmed GFM-style as prose.
+    assert (
+        normalize_bare_urls_for_slack_markdown("見て https://example.com/p;a=1;b=2 ね")
+        == "見て <https://example.com/p;a=1;b=2> ね"
+    )
+    assert (
+        normalize_bare_urls_for_slack_markdown("See https://example.com.")
+        == "See <https://example.com>."
+    )
+
+
 def test_slack_link_in_table_cell_keeps_single_cell() -> None:
     raw = """| Name | Link |
 |---|---|

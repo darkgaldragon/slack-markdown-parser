@@ -148,9 +148,12 @@ def _is_han_or_kana_char(char: str) -> bool:
 # URL may legally contain a wildcard/query ``*`` and an IRI/IDN may contain CJK
 # letters, so those must be preserved.)
 _URL_STOP_CHARS = frozenset("`<>|")
-# Trailing punctuation that, GFM-style, belongs to the surrounding prose rather
-# than the URL (a closing paren is handled separately, with balancing).
-_URL_TRAILING_PUNCTUATION = frozenset(".,;:!?\"'*~_")
+# Trailing punctuation stripped from the end of a bare URL. This is exactly
+# GFM's autolink-extension set (``! ? . , : * _ ~``); a closing paren is handled
+# separately, with balancing. ``;`` and quotes are intentionally NOT included —
+# ``;`` is URL-legal in matrix/path parameters and quotes are sub-delimiters, so
+# trimming them could change the link target rather than just shedding prose.
+_URL_TRAILING_PUNCTUATION = frozenset("!?.,:*_~")
 
 
 def _is_url_boundary_char(char: str) -> bool:
