@@ -75,8 +75,17 @@ If your pull request affects users, please include a short changelog note in the
 ## Maintainer releases
 
 Package publishing is handled by GitHub Actions Trusted Publishing only.
-Maintainers should create or update the changelog, create an annotated tag like
-`v2.3.2`, and push the tag to GitHub.
+Pushing a `v*` tag triggers the publish workflow, so a tag is an irreversible
+public release, not just a label. Before tagging, land a `Release vX.Y.Z` commit
+that bumps the version in both `pyproject.toml` and
+`slack_markdown_parser/__init__.py` and promotes the `[Unreleased]` changelog
+entries to a dated section — otherwise the built artifacts will not match the
+tag. Then create an annotated tag like `v2.4.1` on the merged release commit and
+push it.
+
+The full step-by-step flow (verification loop, branch-protection rules, review
+thread resolution, and the release/tag sequence) is documented in
+`docs/_internal/fix-and-release-playbook.md`.
 
 Do not publish with `twine upload`, `uv publish`, or a local PyPI API token for
 this repository. If a tag points to a version that is already present on PyPI,

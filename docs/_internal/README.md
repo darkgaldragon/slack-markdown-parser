@@ -16,6 +16,7 @@ belongs in a private workspace rather than in the public repository.
 
 Current contents:
 
+- `fix-and-release-playbook.md` — end-to-end flow: verify a rendering bug, land the fix, and cut a release (branch protection, CI gates, Trusted-Publisher tagging)
 - `slack-render-test-workflow.md`
 - `slack-client-manual-checklist.md`
 - `slack-render-test-app-manifest.yaml`
