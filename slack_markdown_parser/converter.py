@@ -154,16 +154,27 @@ _URL_STOP_CHARS = frozenset("`<>|")
 # ``;`` is URL-legal in matrix/path parameters and quotes are sub-delimiters, so
 # trimming them could change the link target rather than just shedding prose.
 _URL_TRAILING_PUNCTUATION = frozenset("!?.,:*_~")
+# CJK and full/half-width punctuation/brackets that terminate prose, so a bare
+# URL is cut here. This is an explicit set rather than the whole U+3000–U+303F
+# block on purpose: letter-like CJK iteration marks (々 U+3005, 〻 U+303B),
+# ditto/closure marks (〆 U+3006) and the ideographic number zero (〇 U+3007)
+# are *excluded* so IRIs such as ``https://ja.wikipedia.org/wiki/人々`` survive.
+_URL_CJK_BOUNDARY_CHARS = frozenset(
+    "、。〃〈〉《》「」『』【】〔〕〖〗〘〙〚〛〜〝〞・…"  # CJK punctuation & brackets
+    "！？，．：；（）［］｛｝＜＞｜"  # full-width punctuation & brackets
+    "｡｢｣､"  # half-width CJK punctuation & brackets
+)
 
 
 def _is_url_boundary_char(char: str) -> bool:
     """Return True when ``char`` is a hard boundary where a bare URL must stop.
 
     Only unambiguous prose/markup boundaries qualify: code/angle/pipe markers
-    and CJK *punctuation* (``、``/``。``/``」`` …). CJK *letters* are not a
-    boundary, so IRIs such as ``https://ja.wikipedia.org/wiki/日本語`` survive.
+    and CJK/full-width *punctuation* (``、``/``。``/``」``/``）`` …). CJK
+    *letters* (including iteration marks like ``々``) are not a boundary, so
+    IRIs such as ``https://ja.wikipedia.org/wiki/人々`` survive.
     """
-    return char in _URL_STOP_CHARS or 0x3000 <= ord(char) <= 0x303F
+    return char in _URL_STOP_CHARS or char in _URL_CJK_BOUNDARY_CHARS
 
 
 def _trim_bare_url(url: str) -> str:

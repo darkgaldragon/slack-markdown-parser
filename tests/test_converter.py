@@ -1109,6 +1109,24 @@ def test_bare_url_preserves_single_asterisk_in_query() -> None:
     )
 
 
+def test_bare_url_preserves_cjk_iteration_mark_in_iri() -> None:
+    # Codex review on #54: CJK iteration marks (`々`, `〻`) are letter-like and
+    # occur in real words/IRIs (人々, 各々), so they must not be boundaries.
+    assert (
+        normalize_bare_urls_for_slack_markdown("https://ja.wikipedia.org/wiki/人々")
+        == "<https://ja.wikipedia.org/wiki/人々>"
+    )
+
+
+def test_bare_url_stops_at_fullwidth_punctuation() -> None:
+    # Codex review on #54: full-width CJK punctuation terminates prose just like
+    # its ASCII counterpart, so the autolink must stop before it.
+    assert (
+        normalize_bare_urls_for_slack_markdown("詳細はhttps://example.com）次へ")
+        == "詳細は<https://example.com>）次へ"
+    )
+
+
 def test_bare_url_keeps_url_legal_semicolon_but_trims_sentence_period() -> None:
     # Codex review on #54: `;` is URL-legal (matrix/path parameters) and must be
     # kept, while a sentence-final ASCII period is trimmed GFM-style as prose.
