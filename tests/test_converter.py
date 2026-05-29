@@ -839,6 +839,85 @@ def test_ascii_bold_before_cjk_comma_without_kana_gets_inner_zwsp() -> None:
     assert converted == "Score **70.9%→83.0%\u200b**、続き"
 
 
+def test_whitespace_flanked_bold_marker_stays_literal() -> None:
+    # ``** spaced **`` is not emphasis in CommonMark — the delimiters are
+    # whitespace-flanked — so it must be left untouched rather than paired.
+    text = "** spaced **"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert converted == text
+    assert "\u200b" not in converted
+
+
+def test_stray_bold_marker_does_not_corrupt_following_bold() -> None:
+    # A stray, whitespace-flanked ``**`` in the middle of a line must not be
+    # paired with a later marker; the well-formed ``**bold**`` after it still
+    # renders and its neighbours are left untouched.
+    text = "use ** like **bold** ok"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert converted == text
+
+
+def test_unclosed_bold_marker_at_end_stays_literal() -> None:
+    # A closed bold span followed by a dangling ``**`` leaves the unclosed
+    # marker literal without disturbing the closed span.
+    text = "**done** and **oops"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert converted == text
+
+
+def test_stray_bold_marker_does_not_break_inner_zwsp_of_other_span() -> None:
+    # Regression: an unbalanced ``**`` earlier in the same block used to shift
+    # marker pairing across newlines (the bold pattern is DOTALL), which flipped
+    # the ZWSP of a later punctuation-terminated bold to the broken *outer*
+    # position and exposed the literal ``**`` on Slack. The stray marker must
+    # stay literal while the punctuation bold keeps its protective inner ZWSP.
+    text = "- **手順:** ここで ** 露出\nASCII **70.9%→83.0%**、に直結"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert (
+        converted == "- **手順:** ここで ** 露出\nASCII **70.9%→83.0%\u200b**、に直結"
+    )
+    # No closing marker received an outer ZWSP (the failure signature).
+    assert "**\u200b" not in converted
+
+
+def test_unbalanced_marker_block_keeps_other_bold_inner_zwsp() -> None:
+    # End-to-end (markdown path): a stray ``**`` in one list item must not
+    # corrupt the inner-ZWSP protection of a punctuation bold in a sibling item.
+    markdown = "見出し\n- **手順:** ここで ** 露出\n- 値 **70.9%→83.0%**、で直結"
+    payloads = convert_markdown_to_slack_payloads(markdown)
+    block_text = payloads[0]["blocks"][0]["text"]
+
+    assert "**70.9%→83.0%\u200b**、" in block_text
+    assert "**\u200b" not in block_text
+
+
+def test_dangling_bold_opener_does_not_steal_later_span_zwsp() -> None:
+    # Codex review on #52: a dangling opener with no valid closer of its own
+    # (`**: x **`) must not scan past the literal stray and steal a later
+    # well-formed span's closing marker. That mis-pairing used to drop a stray
+    # ZWSP just inside the dangling `**`. Bounding the bold body to a single
+    # `**` run keeps the dangling opener literal and protects only the real span.
+    text = "**: x ** and **y%**、"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert converted == "**: x ** and **y%\u200b**、"
+    # No ZWSP was inserted just inside the dangling opener.
+    assert "**\u200b:" not in converted
+
+
+def test_dangling_bold_opener_keeps_following_span_bold() -> None:
+    # Same class, end to end: the second span stays an independent bold with its
+    # inner ZWSP while the unclosed first marker is left literal.
+    text = "**oops ** and **70.9%→83.0%**、"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert converted == "**oops ** and **70.9%→83.0%\u200b**、"
+
+
 def test_blocks_to_plain_text_and_fallback_generation() -> None:
     raw = """# Title
 

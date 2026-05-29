@@ -177,6 +177,7 @@ Rules:
 - The start and end of a chunk (a line/text boundary, or the edge of a fenced code block) are treated as safe; no zero-width space is added there.
 - When an outer edge is tight against surrounding non-boundary text, only that edge is padded with a zero-width space. The safe (boundary) edge is left clean.
 - When an emphasis marker (`**`, `*`, `~~`) sits directly against punctuation on its inner side (for example `**注意:**` or `**70.9%→83.0%**`), a zero-width space is inserted just *inside* the marker. This makes the marker's inner neighbor a non-punctuation character, so Slack's CommonMark right-/left-flanking check succeeds regardless of what surrounds the token — including before CJK text and CJK punctuation (`、` / `。`), which Slack does not accept as a flanking neighbor. Inline code spans are exempt from this rule because they do not obey flanking rules.
+- Emphasis delimiters are recognized only when they satisfy CommonMark's minimal flanking rule: an opening run is not immediately followed by whitespace, and a closing run is not immediately preceded by whitespace. A stray, whitespace-flanked marker (for example the literal `**` in `閉じ ** が`), or an otherwise unbalanced marker, is left untouched. This prevents one dangling marker from shifting the pairing of nearby well-formed spans and misplacing their zero-width spaces.
 
 Exception:
 

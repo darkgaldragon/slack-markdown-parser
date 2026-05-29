@@ -163,10 +163,21 @@ Observed Slack specifics (confirmed via the section-1 loop):
 - A ZWSP (`U+200B`) placed just *outside* a closing marker is neither whitespace
   nor punctuation, so `**...:**​` fails the check and exposes the literal `**`.
 - Slack accepts ASCII punctuation/whitespace as a flanking neighbor but **not**
-  CJK punctuation (`、` / `。`), so `**70.9%→83.0%**、` is exposed regardless of
-  ZWSP placement.
+  CJK punctuation (`、` / `。`). The fix is to place the ZWSP just *inside* the
+  closing marker — byte order `…83.0%`, ZWSP, `**`, `、` — so the closing run
+  flanks via CommonMark rule 2a and Slack closes the bold no matter what
+  follows: a CJK comma/period, CJK content, or ASCII punctuation. (Verified by
+  controlled raw probes; an *outer* ZWSP, after the close, never rescues it.)
 - CJK *content* emphasis (`本文**強調**です`) closes on its own; the last inner
   char is not punctuation.
+- An unbalanced (odd) emphasis delimiter — e.g. a stray, whitespace-flanked
+  `**` such as the literal one in `閉じ ** が` — used to shift marker pairing
+  across the whole block (the bold pattern is `re.DOTALL`), flipping the ZWSP of
+  unrelated, well-formed bold spans to the broken *outer* position.
+  `EMPHASIS_PATTERNS` now enforces CommonMark's whitespace-flanking minimum (an
+  opener is not followed by whitespace, a closer is not preceded by whitespace),
+  so a non-flanking stray marker stays literal and no longer corrupts its
+  neighbours. (Fixed in 2.4.2.)
 
 The fix used by `wrap_match` / `_should_preserve_raw_punctuation_emphasis`:
 treat chunk boundaries as safe, pad only the tight outer edge, and when a marker
