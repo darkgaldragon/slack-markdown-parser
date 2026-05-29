@@ -6,9 +6,12 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 ## [Unreleased]
 
+## [2.4.2] - 2026-05-29
+
 ### Fixed
 
 - Stopped an unbalanced emphasis delimiter from corrupting unrelated, well-formed spans in the same block. The bold/italic/strikethrough patterns are matched with `re.DOTALL`, so a single stray `**` (for example a whitespace-flanked literal `**` in `閉じ ** が`, or an unclosed marker) shifted marker pairing across the whole block and flipped the protective ZWSP of nearby punctuation-terminated bold to the broken *outer* position, re-exposing the literal markers on Slack. `EMPHASIS_PATTERNS` now enforces CommonMark's minimal flanking requirement — an opening run is not followed by whitespace and a closing run is not preceded by whitespace — so a non-flanking stray marker stays literal and no longer disturbs its neighbours.
+- Bounded the `**` and `~~` emphasis bodies to a single delimiter run so a dangling opener with no valid closer of its own (for example `**oops **` or `**: x **` before a later `**…%**`) can no longer scan past the literal stray and steal a following well-formed span's closing marker, which had misplaced that span's protective ZWSP. The single-`*` italic body is intentionally left unbounded because italics legitimately wrap `**bold**`.
 
 ## [2.4.1] - 2026-05-29
 
