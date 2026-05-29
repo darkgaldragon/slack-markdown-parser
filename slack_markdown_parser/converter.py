@@ -34,14 +34,22 @@ MARKDOWN_LINK_PATTERN = re.compile(r"\[[^\]\n]+\]\([^\)\n]+\)")
 INLINE_CODE_SPAN_PATTERN = re.compile(r"(?<!`)`[^`\n]+`(?!`)", flags=re.DOTALL)
 # Emphasis delimiters must satisfy CommonMark's minimal flanking requirement:
 # an opening run is not followed by whitespace and a closing run is not preceded
-# by whitespace. Enforcing this in the pattern keeps a stray, whitespace-flanked
-# delimiter (e.g. the literal ``**`` in ``閉じ ** が``) from being paired, which
-# would otherwise shift every following marker and corrupt the ZWSP placement of
-# unrelated, well-formed spans in the same block.
+# by whitespace. Enforcing this keeps a stray, whitespace-flanked delimiter
+# (e.g. the literal ``**`` in ``閉じ ** が``) from being paired at all.
+#
+# For ``**`` and ``~~`` the body additionally may not contain the same delimiter
+# run (``(?:(?!\*\*).)+?`` / ``(?:(?!~~).)+?``). Without this, a dangling opener
+# with no valid closer of its own (``**oops ** and **70.9%→83.0%**``) would scan
+# past the literal stray and steal a *later* well-formed span's closing marker,
+# shifting the pairing and corrupting that span's ZWSP placement. Bounding the
+# body to a single run makes the regex pair the same markers CommonMark does.
+# (The single-``*`` italic body is intentionally not bounded this way: italics
+# legitimately wrap ``**bold**`` and ``*`` is heavily overloaded, so it keeps the
+# whitespace guard only.)
 EMPHASIS_PATTERNS = (
-    re.compile(r"(?<!\*)\*\*(?!\s)(.+?)(?<!\s)\*\*(?!\*)", flags=re.DOTALL),
+    re.compile(r"(?<!\*)\*\*(?!\s)((?:(?!\*\*).)+?)(?<!\s)\*\*(?!\*)", flags=re.DOTALL),
     re.compile(r"(?<!\*)\*(?!\*)(?!\s)(.+?)(?<!\s)(?<!\*)\*(?!\*)", flags=re.DOTALL),
-    re.compile(r"~~(?!\s)(.+?)(?<!\s)~~", flags=re.DOTALL),
+    re.compile(r"~~(?!\s)((?:(?!~~).)+?)(?<!\s)~~", flags=re.DOTALL),
 )
 INLINE_CODE_PLACEHOLDER_PATTERN = re.compile(r"\ufff0code\d+\ufff1")
 PROTECTED_UNDERSCORE_SPAN_PATTERN = re.compile(

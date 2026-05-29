@@ -895,6 +895,29 @@ def test_unbalanced_marker_block_keeps_other_bold_inner_zwsp() -> None:
     assert "**\u200b" not in block_text
 
 
+def test_dangling_bold_opener_does_not_steal_later_span_zwsp() -> None:
+    # Codex review on #52: a dangling opener with no valid closer of its own
+    # (`**: x **`) must not scan past the literal stray and steal a later
+    # well-formed span's closing marker. That mis-pairing used to drop a stray
+    # ZWSP just inside the dangling `**`. Bounding the bold body to a single
+    # `**` run keeps the dangling opener literal and protects only the real span.
+    text = "**: x ** and **y%**、"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert converted == "**: x ** and **y%\u200b**、"
+    # No ZWSP was inserted just inside the dangling opener.
+    assert "**\u200b:" not in converted
+
+
+def test_dangling_bold_opener_keeps_following_span_bold() -> None:
+    # Same class, end to end: the second span stays an independent bold with its
+    # inner ZWSP while the unclosed first marker is left literal.
+    text = "**oops ** and **70.9%→83.0%**、"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert converted == "**oops ** and **70.9%→83.0%\u200b**、"
+
+
 def test_blocks_to_plain_text_and_fallback_generation() -> None:
     raw = """# Title
 
