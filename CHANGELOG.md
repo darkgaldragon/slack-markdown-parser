@@ -8,7 +8,7 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 ### Fixed
 
-- Stopped bare-URL autolinking from greedily swallowing trailing text. `normalize_bare_urls_for_slack_markdown` matched `https?://[^\s<]+`, so a scheme URL glued directly to following CJK text (e.g. `(https://example.com)**。に句点を直結。`) — common in Japanese, which puts no space after a URL — captured the closing paren, the `**` markers, the CJK punctuation, and the rest of the sentence into one `<…>` autolink, over-extending the link and exposing the literal `**`. The matched URL is now trimmed GFM-style: it stops at CJK letters/punctuation and emphasis/code/angle markers (`*`, `` ` ``, `<`, `>`, `|`), and trailing punctuation (`. , ; : ! ?` and an unbalanced `)`) is dropped while balanced parentheses are kept.
+- Stopped bare-URL autolinking from greedily swallowing trailing text. `normalize_bare_urls_for_slack_markdown` matched `https?://[^\s<]+`, so a scheme URL glued directly to following CJK text (e.g. `(https://example.com)**。に句点を直結。`) — common in Japanese, which puts no space after a URL — captured the closing paren, the `**` markers, the CJK punctuation, and the rest of the sentence into one `<…>` autolink, over-extending the link and exposing the literal `**`. The matched URL is now trimmed GFM-style: it stops at CJK letters/punctuation and emphasis/code/angle markers (`*`, `` ` ``, `<`, `>`, `|`), and trailing punctuation (`. , ; : ! ? " '` and an unbalanced `)`) is dropped while balanced parentheses are kept.
 
 ## [2.4.2] - 2026-05-29
 
