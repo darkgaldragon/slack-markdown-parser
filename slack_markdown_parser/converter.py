@@ -515,6 +515,13 @@ def _should_preserve_raw_punctuation_emphasis(
         return False
     if any(not _is_punctuation_like(char, boundary_chars) for char in tight_chars):
         return False
+    # Slack only accepts ASCII punctuation (and whitespace) as a flanking
+    # neighbor. A non-ASCII punctuation neighbor — e.g. the CJK comma/period
+    # ``、``/``。`` — does not satisfy the right-/left-flanking rule, so the
+    # token must not be preserved raw; it needs the inner-ZWSP protection in
+    # ``wrap_match`` instead.
+    if any(ord(char) > 127 for char in tight_chars):
+        return False
     if any(_is_han_or_kana_char(char) or _is_hangul_char(char) for char in token_text):
         return False
 
@@ -703,21 +710,65 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, list[int]]:
 
     def wrap_match(match: re.Match[str], source: str) -> str:
         start, end = match.start(), match.end()
-        before_safe = start > 0 and source[start - 1] in boundary_chars
-        after_safe = end < len(source) and source[end] in boundary_chars
+        token = match.group(0)
+        # The start/end of the chunk are effective boundaries: there is no
+        # adjacent text to separate the marker from, so they are safe. Treating
+        # them as unsafe used to append a ZWSP right after a closing marker, and
+        # when the last content character was punctuation (e.g. ``**注意:**``)
+        # the trailing ZWSP made Slack fail the CommonMark right-flanking check
+        # and exposed the literal ``**``.
+        before_safe = start == 0 or source[start - 1] in boundary_chars
+        after_safe = end == len(source) or source[end] in boundary_chars
         if before_safe and after_safe:
-            return match.group(0)
+            return token
         if _should_preserve_raw_punctuation_emphasis(
-            source, start, end, match.group(0), boundary_chars
+            source, start, end, token, boundary_chars
         ):
-            return match.group(0)
+            return token
 
-        # When either outer edge is tightly coupled to surrounding text or
-        # punctuation, wrap the whole token so Slack can treat the decoration
-        # as a standalone span.
-        prefix = ZWSP
-        suffix = ZWSP
-        return f"{prefix}{match.group(0)}{suffix}"
+        # When an outer edge is tightly coupled to surrounding text, pad only
+        # that edge so Slack can treat the decoration as a standalone span.
+        # Padding a safe edge is unnecessary noise.
+        prefix = "" if before_safe else ZWSP
+        suffix = "" if after_safe else ZWSP
+
+        # Emphasis markers (``*``/``**``/``~~``) obey CommonMark delimiter-run
+        # flanking rules; inline code spans (``` `…` ```) do not. When an
+        # emphasis marker sits directly against punctuation on its inner side
+        # (``**注意:**``, ``**70%→83%**``) Slack treats the run as a delimiter
+        # only when the *outer* neighbour is whitespace or ASCII punctuation; a
+        # following CJK character or CJK punctuation (e.g. ``、``) — and even a
+        # ZWSP placed just outside the marker — leaves the literal ``**``
+        # exposed. Inserting a ZWSP just *inside* the marker makes its inner
+        # neighbour a non-punctuation character, so the run flanks via rule 2a
+        # regardless of what surrounds the token.
+        marker_char = token[0]
+        if marker_char != "`":
+            marker_len = len(token) - len(token.lstrip(marker_char))
+            open_marker = token[:marker_len]
+            inner = token[marker_len : len(token) - marker_len]
+            close_marker = token[len(token) - marker_len :]
+            inner_prefix = (
+                ZWSP if inner and _is_punctuation_like(inner[0], boundary_chars) else ""
+            )
+            inner_suffix = (
+                ZWSP
+                if inner and _is_punctuation_like(inner[-1], boundary_chars)
+                else ""
+            )
+            if inner_prefix or inner_suffix:
+                token = (
+                    f"{open_marker}{inner_prefix}{inner}{inner_suffix}{close_marker}"
+                )
+                # The inner ZWSP already lets the marker flank correctly, so an
+                # outer ZWSP on the same edge is redundant — and after a closing
+                # marker it is precisely what would re-break rendering.
+                if inner_prefix:
+                    prefix = ""
+                if inner_suffix:
+                    suffix = ""
+
+        return f"{prefix}{token}{suffix}"
 
     def wrap_nested_code_emphasis_match(
         match: re.Match[str],

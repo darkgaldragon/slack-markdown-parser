@@ -165,16 +165,22 @@ In languages such as Japanese, Chinese, and Korean that do not usually put space
 
 ### Target patterns
 
-For each formatting token below, if either adjacent side is not a space, tab, newline, or existing zero-width space, or if the token touches the start or end of a line, the whole token is normally wrapped in a zero-width space (`U+200B`) so Slack recognizes it as a standalone formatting boundary:
+The library inserts zero-width spaces (`U+200B`) only where they are needed to keep Slack's formatting boundaries intact, without changing the visible layout, for each formatting token below:
 
 - `` `code` ``: inline code
 - `**bold**`: bold
 - `*italic*`: italic
 - `~~strike~~`: strikethrough
 
+Rules:
+
+- The start and end of a chunk (a line/text boundary, or the edge of a fenced code block) are treated as safe; no zero-width space is added there.
+- When an outer edge is tight against surrounding non-boundary text, only that edge is padded with a zero-width space. The safe (boundary) edge is left clean.
+- When an emphasis marker (`**`, `*`, `~~`) sits directly against punctuation on its inner side (for example `**注意:**` or `**70.9%→83.0%**`), a zero-width space is inserted just *inside* the marker. This makes the marker's inner neighbor a non-punctuation character, so Slack's CommonMark right-/left-flanking check succeeds regardless of what surrounds the token — including before CJK text and CJK punctuation (`、` / `。`), which Slack does not accept as a flanking neighbor. Inline code spans are exempt from this rule because they do not obey flanking rules.
+
 Exception:
 
-- If the token body is English-like text and the only tight neighbors are punctuation characters, the raw token is preserved. This avoids over-correcting spans such as `**APIYI (apiyi.com)**:` that Slack already renders correctly without extra zero-width spaces.
+- If the token body is English-like text and its only tight neighbors are **ASCII** punctuation characters, the raw token is preserved. This avoids over-correcting spans such as `**APIYI (apiyi.com)**:` that Slack already renders correctly without extra zero-width spaces. A non-ASCII punctuation neighbor such as `、` or `。` is not preserved — it is protected by the inner zero-width space described above.
 
 ### Excluded regions
 

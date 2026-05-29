@@ -503,19 +503,24 @@ def test_preserve_visual_blank_lines_keeps_fallback_text_with_zwsp_before_blank_
 
 
 def test_zero_width_space_not_inserted_inside_code_fence() -> None:
-    text = "```\n**not bold**\n```\noutside **bold**"
+    text = "```\n**not bold**\n```\n\u672c\u6587**\u6ce8\u610f:**\u3067\u3059"
     converted = add_zero_width_spaces_to_markdown(text)
 
+    # Fence content is preserved verbatim (no ZWSP padding inside the fence).
     assert "\u200b**not bold**" not in converted
-    assert "**bold**\u200b" in converted
+    assert "**not bold**\u200b" not in converted
+    # Text outside the fence is still processed: an inner ZWSP protects the
+    # punctuation-terminated bold so Slack keeps it as a bold run.
+    assert "**\u6ce8\u610f:\u200b**" in converted
 
 
 def test_zero_width_space_not_inserted_inside_tilde_fence() -> None:
-    text = "~~~\n**not bold**\n~~~\noutside **bold**"
+    text = "~~~\n**not bold**\n~~~\n\u672c\u6587**\u6ce8\u610f:**\u3067\u3059"
     converted = add_zero_width_spaces_to_markdown(text)
 
     assert "\u200b**not bold**" not in converted
-    assert "**bold**\u200b" in converted
+    assert "**not bold**\u200b" not in converted
+    assert "**\u6ce8\u610f:\u200b**" in converted
 
 
 def test_inline_code_without_spaces_is_padded_with_zwsp() -> None:
@@ -727,7 +732,11 @@ def test_bold_markers_inside_inline_code_are_not_rewritten() -> None:
     assert "コードは\u200b`**literal**`\u200bです。" == converted
 
 
-def test_bold_with_punctuation_on_only_one_side_is_wrapped_on_both_sides() -> None:
+def test_bold_ending_in_punctuation_gets_inner_zwsp_before_close() -> None:
+    # A bold run ending in punctuation (``%``) directly followed by CJK
+    # punctuation (``、``/``。``) is exposed by Slack unless the closing marker
+    # flanks via CommonMark rule 2a. An inner ZWSP just before the closing
+    # ``**`` achieves that; an outer ZWSP would itself re-break the run.
     text = (
         "GDPval は **70.9%→83.0%**、"
         "Investment Banking Modeling Tasks は **68.4%→87.3%**。"
@@ -735,19 +744,72 @@ def test_bold_with_punctuation_on_only_one_side_is_wrapped_on_both_sides() -> No
     converted = add_zero_width_spaces_to_markdown(text)
 
     assert (
-        "GDPval は \u200b**70.9%→83.0%**\u200b、"
-        "Investment Banking Modeling Tasks は \u200b**68.4%→87.3%**\u200b。"
+        "GDPval は **70.9%→83.0%\u200b**、"
+        "Investment Banking Modeling Tasks は **68.4%→87.3%\u200b**。"
     ) == converted
 
 
-def test_bold_with_tight_boundary_on_left_is_wrapped_on_both_sides() -> None:
+def test_bold_with_tight_boundary_on_left_is_wrapped_with_outer_zwsp() -> None:
+    # A CJK-terminated bold needs no inner ZWSP; only the tight left edge is
+    # padded and the safe (space) right edge is left clean.
     text = "特に伸びが大きいのは、**実務系** と **ツール連携** ね。"
     converted = add_zero_width_spaces_to_markdown(text)
 
-    assert (
-        "特に伸びが大きいのは、\u200b**実務系**\u200b と **ツール連携** ね。"
-        == converted
-    )
+    assert "特に伸びが大きいのは、\u200b**実務系** と **ツール連携** ね。" == converted
+
+
+def test_list_item_bold_ending_in_colon_at_line_end_stays_raw() -> None:
+    # Reported bug: a list item whose bold ends in a colon used to receive a
+    # trailing ZWSP right after the closing ``**`` (``- ...**\u200b``), which
+    # broke the run on Slack. At a line/text boundary no padding is needed.
+    text = "- **末尾コロン:**"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert converted == text
+    assert "\u200b" not in converted
+
+
+def test_bold_ending_in_colon_before_cjk_gets_inner_zwsp() -> None:
+    # Colon-terminated bold glued to a following CJK character only renders
+    # when the closing marker flanks via rule 2a, so a ZWSP is inserted just
+    # inside the closing ``**``.
+    text = "本文**強調:**です"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert converted == "本文\u200b**強調:\u200b**です"
+
+
+def test_bold_ending_in_punctuation_before_cjk_comma_gets_inner_zwsp() -> None:
+    # The GDPval/Case-1 pattern: punctuation-terminated bold directly followed
+    # by a CJK comma. Slack does not accept ``、`` as a flanking neighbour, so
+    # the fix relies on the inner ZWSP rather than the (useless) outer one.
+    text = "**項目:**、続き"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert converted == "**項目:\u200b**、続き"
+
+
+def test_bold_ending_in_cjk_before_cjk_gets_no_inner_zwsp() -> None:
+    # A CJK-terminated bold flanks via rule 2a on its own, so no ZWSP is
+    # added *inside* the markers; only the legacy outer padding is applied.
+    text = "本文**強調**です"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert converted == "本文\u200b**強調**\u200bです"
+    assert "調\u200b**" not in converted  # no inner ZWSP before closing marker
+
+
+def test_reported_colon_bold_list_payload_has_no_exposed_markers() -> None:
+    # End-to-end: a heading-hugging list (markdown path) whose items end in a
+    # bold colon must not emit a ZWSP adjacent to a closing ``**``.
+    markdown = "見出し\n- **カバーできてるもの:**\n- 子: **末尾コロン:**だね"
+    payloads = convert_markdown_to_slack_payloads(markdown)
+    block_text = payloads[0]["blocks"][0]["text"]
+
+    # No ZWSP directly after any closing ``**`` (the failure mode).
+    assert "**\u200b" not in block_text
+    # The colon-before-CJK item is protected by an inner ZWSP instead.
+    assert "**末尾コロン:\u200b**だね" in block_text
 
 
 def test_english_bold_with_punctuation_on_right_stays_raw() -> None:
@@ -757,11 +819,24 @@ def test_english_bold_with_punctuation_on_right_stays_raw() -> None:
     assert converted == text
 
 
-def test_english_bold_with_japanese_period_stays_raw() -> None:
+def test_english_bold_before_japanese_period_gets_inner_zwsp() -> None:
+    # Slack does not accept a CJK full stop (``。``) as a flanking neighbor,
+    # so an English bold ending in punctuation (``)``) right before it is no
+    # longer preserved raw — an inner ZWSP protects the closing marker.
     text = "• **APIYI (apiyi.com)**。"
     converted = add_zero_width_spaces_to_markdown(text)
 
-    assert converted == text
+    assert converted == "• **APIYI (apiyi.com)\u200b**。"
+
+
+def test_ascii_bold_before_cjk_comma_without_kana_gets_inner_zwsp() -> None:
+    # Codex review case: ASCII/numeric emphasis with no nearby Han/Kana must
+    # not be preserved raw when followed by a CJK comma; the inner ZWSP keeps
+    # the closing ``**`` flanking via rule 2a.
+    text = "Score **70.9%→83.0%**、続き"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert converted == "Score **70.9%→83.0%\u200b**、続き"
 
 
 def test_blocks_to_plain_text_and_fallback_generation() -> None:
