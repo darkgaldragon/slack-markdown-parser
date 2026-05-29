@@ -143,6 +143,62 @@ def _is_han_or_kana_char(char: str) -> bool:
     )
 
 
+# Characters that can never be part of a bare URL in this library's prose
+# context: emphasis/code markers and angle/pipe tokens used by Slack markup.
+_URL_STOP_CHARS = frozenset("*`<>|")
+# Trailing ASCII punctuation that, GFM-style, belongs to the surrounding prose
+# rather than the URL (a closing paren is handled separately, with balancing).
+_URL_TRAILING_PUNCTUATION = frozenset(".,;:!?\"'")
+
+
+def _is_url_boundary_char(char: str) -> bool:
+    """Return True when ``char`` marks where a bare URL must stop.
+
+    A bare URL is cut at emphasis/code/angle markers and at CJK letters or
+    punctuation. In CJK writing a URL is usually glued directly to the
+    following text with no whitespace, so a greedy ``[^\\s<]+`` match would
+    otherwise swallow the trailing ``)``/``**``/``、``/``。`` and the rest of
+    the sentence into the autolink.
+    """
+    if char in _URL_STOP_CHARS:
+        return True
+    codepoint = ord(char)
+    return (
+        _is_han_or_kana_char(char)
+        or _is_hangul_char(char)
+        or 0x3000 <= codepoint <= 0x303F  # CJK symbols and punctuation (、。「」…)
+        or 0xFF00 <= codepoint <= 0xFFEF  # full-width / half-width forms (）！…)
+    )
+
+
+def _trim_bare_url(url: str) -> str:
+    """Trim a greedily matched bare URL down to its real extent.
+
+    Stops the URL at the first prose/markup boundary character and then drops
+    trailing punctuation (and unbalanced closing parens) the way GFM's
+    autolink extension does, so ``https://example.com)**、`` becomes
+    ``https://example.com``.
+    """
+    for index, char in enumerate(url):
+        if _is_url_boundary_char(char):
+            url = url[:index]
+            break
+
+    while url:
+        last = url[-1]
+        if last == ")":
+            if url.count(")") <= url.count("("):
+                break
+            url = url[:-1]
+            continue
+        if last in _URL_TRAILING_PUNCTUATION:
+            url = url[:-1]
+            continue
+        break
+
+    return url
+
+
 def _nested_code_space_strategy(
     source: str,
     start: int,
@@ -596,9 +652,15 @@ def normalize_bare_urls_for_slack_markdown(text: str) -> str:
 
             url_match = BARE_URL_PATTERN.match(chunk, cursor)
             if url_match:
-                parts.append(f"<{url_match.group(0)}>")
-                cursor = url_match.end()
-                continue
+                url = _trim_bare_url(url_match.group(0))
+                scheme = re.match(r"https?://", url, re.IGNORECASE)
+                # Only autolink when something host-like survives the trim;
+                # a bare ``https://`` followed straight by CJK would otherwise
+                # produce an empty ``<https://>`` autolink.
+                if scheme and len(url) > scheme.end():
+                    parts.append(f"<{url}>")
+                    cursor += len(url)
+                    continue
 
             parts.append(char)
             cursor += 1
