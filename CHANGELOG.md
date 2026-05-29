@@ -6,6 +6,10 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 ## [Unreleased]
 
+### Fixed
+
+- Stopped an unbalanced emphasis delimiter from corrupting unrelated, well-formed spans in the same block. The bold/italic/strikethrough patterns are matched with `re.DOTALL`, so a single stray `**` (for example a whitespace-flanked literal `**` in `閉じ ** が`, or an unclosed marker) shifted marker pairing across the whole block and flipped the protective ZWSP of nearby punctuation-terminated bold to the broken *outer* position, re-exposing the literal markers on Slack. `EMPHASIS_PATTERNS` now enforces CommonMark's minimal flanking requirement — an opening run is not followed by whitespace and a closing run is not preceded by whitespace — so a non-flanking stray marker stays literal and no longer disturbs its neighbours.
+
 ## [2.4.1] - 2026-05-29
 
 ### Fixed
