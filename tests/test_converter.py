@@ -1028,6 +1028,118 @@ def test_fallback_unwraps_inserted_bare_url_autolinks() -> None:
     assert payload["text"] == text
 
 
+def test_bare_url_does_not_swallow_following_cjk() -> None:
+    # Regression (#chloe): a scheme URL glued directly to CJK text used to be
+    # matched greedily to end-of-line, dragging the closing paren, the bold
+    # markers, and the rest of the sentence into one autolink. The URL must be
+    # trimmed to its real extent so the surrounding markup survives.
+    converted = normalize_bare_urls_for_slack_markdown(
+        "**APIYI (https://apiyi.com)**。に句点を直結。"
+    )
+
+    assert converted == "**APIYI (<https://apiyi.com>)**。に句点を直結。"
+
+
+def test_bare_url_trims_trailing_cjk_punctuation() -> None:
+    converted = normalize_bare_urls_for_slack_markdown(
+        "詳細は https://example.com。次へ"
+    )
+
+    assert converted == "詳細は <https://example.com>。次へ"
+
+
+def test_bare_url_drops_unbalanced_paren_but_keeps_balanced() -> None:
+    assert (
+        normalize_bare_urls_for_slack_markdown("(https://example.com)")
+        == "(<https://example.com>)"
+    )
+    assert (
+        normalize_bare_urls_for_slack_markdown(
+            "see https://en.wikipedia.org/wiki/Foo_(bar) ok"
+        )
+        == "see <https://en.wikipedia.org/wiki/Foo_(bar)> ok"
+    )
+
+
+def test_bare_url_stops_at_emphasis_markers() -> None:
+    assert (
+        normalize_bare_urls_for_slack_markdown("**https://example.com**")
+        == "**<https://example.com>**"
+    )
+
+
+def test_scheme_url_in_bold_before_cjk_keeps_bold_closed() -> None:
+    # End to end: the autolink no longer over-extends, the bold closes with an
+    # inner ZWSP, and the literal ``**`` markers are not exposed on Slack.
+    payload = convert_markdown_to_slack_payloads(
+        "英字太字の **APIYI (https://apiyi.com)**。に句点を直結。"
+    )[0]
+    block_text = payload["blocks"][0]["text"]
+
+    assert "**APIYI (<https://apiyi.com>)\u200b**。" in block_text
+    # No closing marker received an outer ZWSP (the exposure signature).
+    assert "**\u200b" not in block_text
+
+
+def test_bare_url_preserves_cjk_iri_path() -> None:
+    # Codex review on #54: CJK *letters* are legal in an IRI path / IDN host,
+    # so the trim must not cut there (only CJK punctuation and emphasis runs are
+    # boundaries). A Japanese Wikipedia URL must stay intact.
+    assert (
+        normalize_bare_urls_for_slack_markdown(
+            "詳細は https://ja.wikipedia.org/wiki/日本語 を参照"
+        )
+        == "詳細は <https://ja.wikipedia.org/wiki/日本語> を参照"
+    )
+    assert (
+        normalize_bare_urls_for_slack_markdown("https://日本語.example.com/path")
+        == "<https://日本語.example.com/path>"
+    )
+
+
+def test_bare_url_preserves_single_asterisk_in_query() -> None:
+    # Codex review on #54: a lone ``*`` is legal in a URL path/query (wildcards),
+    # so only a doubled ``**`` emphasis run is a boundary. The link target must
+    # not be truncated at the asterisk.
+    assert (
+        normalize_bare_urls_for_slack_markdown(
+            "検索 https://example.com/search?q=a*b です"
+        )
+        == "検索 <https://example.com/search?q=a*b> です"
+    )
+
+
+def test_bare_url_preserves_cjk_iteration_mark_in_iri() -> None:
+    # Codex review on #54: CJK iteration marks (`々`, `〻`) are letter-like and
+    # occur in real words/IRIs (人々, 各々), so they must not be boundaries.
+    assert (
+        normalize_bare_urls_for_slack_markdown("https://ja.wikipedia.org/wiki/人々")
+        == "<https://ja.wikipedia.org/wiki/人々>"
+    )
+
+
+def test_bare_url_stops_at_fullwidth_punctuation() -> None:
+    # Codex review on #54: full-width CJK punctuation terminates prose just like
+    # its ASCII counterpart, so the autolink must stop before it.
+    assert (
+        normalize_bare_urls_for_slack_markdown("詳細はhttps://example.com）次へ")
+        == "詳細は<https://example.com>）次へ"
+    )
+
+
+def test_bare_url_keeps_url_legal_semicolon_but_trims_sentence_period() -> None:
+    # Codex review on #54: `;` is URL-legal (matrix/path parameters) and must be
+    # kept, while a sentence-final ASCII period is trimmed GFM-style as prose.
+    assert (
+        normalize_bare_urls_for_slack_markdown("見て https://example.com/p;a=1;b=2 ね")
+        == "見て <https://example.com/p;a=1;b=2> ね"
+    )
+    assert (
+        normalize_bare_urls_for_slack_markdown("See https://example.com.")
+        == "See <https://example.com>."
+    )
+
+
 def test_slack_link_in_table_cell_keeps_single_cell() -> None:
     raw = """| Name | Link |
 |---|---|

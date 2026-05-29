@@ -72,7 +72,7 @@ Slack still controls when those newer features appear and how they look, so trea
 ### Things this parser corrects or stabilizes
 
 - `_..._` and `__...__` are normalized into Slack-friendly `*...*` and `**...**`
-- Bare URLs are wrapped into Slack-friendly `<https://...>` form before `markdown` block delivery
+- Bare URLs are wrapped into Slack-friendly `<https://...>` form before `markdown` block delivery. The URL is trimmed to its real extent first (GFM-style): it stops at a doubled emphasis run (`**`/`~~`), at code/angle/pipe markers (`` ` ``, `<`, `>`, `|`), and at CJK / full-width punctuation (`、` `。` `」` `）` `！` …); trailing punctuation (GFM's autolink set `! ? . , : * _ ~`, and an unbalanced `)`) is excluded — `;` and quotes are kept because they are URL-legal. A lone `*` (URL wildcards/queries) and CJK *letters* — including iteration marks like `々` (IRIs / Unicode IDN hosts such as `https://ja.wikipedia.org/wiki/人々`) — are preserved. This keeps a scheme URL glued directly to following CJK text — common in Japanese, where no space separates them — from greedily swallowing the rest of the line (including a closing `**`) into the autolink.
 - Malformed Markdown tables are repaired before `table` block generation
 - Unambiguous standalone Markdown constructs are promoted into native Slack blocks:
   - standalone image syntax `![alt](https://...)` to `image`
