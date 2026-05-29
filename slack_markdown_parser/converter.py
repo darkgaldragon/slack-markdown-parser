@@ -515,6 +515,13 @@ def _should_preserve_raw_punctuation_emphasis(
         return False
     if any(not _is_punctuation_like(char, boundary_chars) for char in tight_chars):
         return False
+    # Slack only accepts ASCII punctuation (and whitespace) as a flanking
+    # neighbor. A non-ASCII punctuation neighbor — e.g. the CJK comma/period
+    # ``、``/``。`` — does not satisfy the right-/left-flanking rule, so the
+    # token must not be preserved raw; it needs the inner-ZWSP protection in
+    # ``wrap_match`` instead.
+    if any(ord(char) > 127 for char in tight_chars):
+        return False
     if any(_is_han_or_kana_char(char) or _is_hangul_char(char) for char in token_text):
         return False
 

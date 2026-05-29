@@ -822,11 +822,24 @@ def test_english_bold_with_punctuation_on_right_stays_raw() -> None:
     assert converted == text
 
 
-def test_english_bold_with_japanese_period_stays_raw() -> None:
+def test_english_bold_before_japanese_period_gets_inner_zwsp() -> None:
+    # Slack does not accept a CJK full stop (``。``) as a flanking neighbor,
+    # so an English bold ending in punctuation (``)``) right before it is no
+    # longer preserved raw — an inner ZWSP protects the closing marker.
     text = "• **APIYI (apiyi.com)**。"
     converted = add_zero_width_spaces_to_markdown(text)
 
-    assert converted == text
+    assert converted == "• **APIYI (apiyi.com)\u200b**。"
+
+
+def test_ascii_bold_before_cjk_comma_without_kana_gets_inner_zwsp() -> None:
+    # Codex review case: ASCII/numeric emphasis with no nearby Han/Kana must
+    # not be preserved raw when followed by a CJK comma; the inner ZWSP keeps
+    # the closing ``**`` flanking via rule 2a.
+    text = "Score **70.9%→83.0%**、続き"
+    converted = add_zero_width_spaces_to_markdown(text)
+
+    assert converted == "Score **70.9%→83.0%\u200b**、続き"
 
 
 def test_blocks_to_plain_text_and_fallback_generation() -> None:
