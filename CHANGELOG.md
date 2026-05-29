@@ -6,6 +6,8 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-05-29
+
 ### Fixed
 
 - Stopped punctuation-terminated emphasis from leaking its literal markers (`**`, `*`, `~~`) in `markdown` blocks. A ZWSP placed just outside a closing marker broke Slack's CommonMark right-flanking check whenever the last inner character was punctuation (e.g. `- **項目:**` at a line end, or `**70.9%→83.0%**、` before CJK punctuation), exposing the raw markers. Chunk boundaries are now treated as safe so no stray ZWSP is appended at line/text ends, and when a marker sits against inner punctuation a ZWSP is inserted just inside it so the run flanks via rule 2a regardless of the following character — including before CJK text and CJK punctuation that Slack does not accept as a flanking neighbor.
