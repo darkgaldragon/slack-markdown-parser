@@ -749,9 +749,7 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, list[int]]:
             inner = token[marker_len : len(token) - marker_len]
             close_marker = token[len(token) - marker_len :]
             inner_prefix = (
-                ZWSP
-                if inner and _is_punctuation_like(inner[0], boundary_chars)
-                else ""
+                ZWSP if inner and _is_punctuation_like(inner[0], boundary_chars) else ""
             )
             inner_suffix = (
                 ZWSP

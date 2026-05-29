@@ -755,10 +755,7 @@ def test_bold_with_tight_boundary_on_left_is_wrapped_with_outer_zwsp() -> None:
     text = "特に伸びが大きいのは、**実務系** と **ツール連携** ね。"
     converted = add_zero_width_spaces_to_markdown(text)
 
-    assert (
-        "特に伸びが大きいのは、\u200b**実務系** と **ツール連携** ね。"
-        == converted
-    )
+    assert "特に伸びが大きいのは、\u200b**実務系** と **ツール連携** ね。" == converted
 
 
 def test_list_item_bold_ending_in_colon_at_line_end_stays_raw() -> None:
