@@ -1293,3 +1293,67 @@ def test_multi_backtick_code_span_keeps_pipe_inside_table_cell() -> None:
     assert extract_plain_text_from_table_cell(table["rows"][1][1]) == "x|y"
     assert code_cell["text"] == "x|y"
     assert code_cell["style"] == {"code": True}
+
+
+def _list_section_elements(blocks: list[dict]) -> list[dict]:
+    """Return the inline elements of the first rich_text_list's first item."""
+    rich = next(block for block in blocks if block.get("type") == "rich_text")
+    rich_list = rich["elements"][0]
+    assert rich_list["type"] == "rich_text_list"
+    return rich_list["elements"][0]["elements"]
+
+
+def test_channel_mention_in_list_becomes_channel_element() -> None:
+    # A list is promoted to a rich_text block, where a `<#C…>` token must be a
+    # structured `channel` element — otherwise Slack renders it as literal text.
+    blocks = convert_markdown_to_slack_blocks("- *Channel:* <#C0B7QPVMTEH>")
+    elements = _list_section_elements(blocks)
+
+    assert {"type": "channel", "channel_id": "C0B7QPVMTEH"} in elements
+
+
+def test_user_mention_in_list_becomes_user_element() -> None:
+    blocks = convert_markdown_to_slack_blocks("- owner <@U123ABC>")
+    elements = _list_section_elements(blocks)
+
+    assert elements[-1] == {"type": "user", "user_id": "U123ABC"}
+
+
+def test_user_group_and_broadcast_mentions_in_list() -> None:
+    blocks = convert_markdown_to_slack_blocks("- ping <!subteam^S999>\n- alert <!here>")
+    rich_list = next(b for b in blocks if b.get("type") == "rich_text")["elements"][0]
+    first = rich_list["elements"][0]["elements"]
+    second = rich_list["elements"][1]["elements"]
+
+    assert {"type": "usergroup", "usergroup_id": "S999"} in first
+    assert {"type": "broadcast", "range": "here"} in second
+
+
+def test_mention_label_is_dropped_in_list() -> None:
+    # `<#C…|name>` carries a display label; Slack renders the element from the
+    # id, so the label is dropped rather than leaked into the output.
+    blocks = convert_markdown_to_slack_blocks("1. see <#C0ENG|general> and <@W42|bob>")
+    elements = _list_section_elements(blocks)
+
+    assert {"type": "channel", "channel_id": "C0ENG"} in elements
+    assert {"type": "user", "user_id": "W42"} in elements
+    assert all("general" not in str(element) for element in elements)
+
+
+def test_mention_in_prose_stays_in_markdown_block() -> None:
+    # Prose is not promoted, so the mention rides in a `markdown` block where
+    # Slack resolves it — no rich_text element is created.
+    blocks = convert_markdown_to_slack_blocks("Go to <#C0B7QPVMTEH> here.")
+
+    assert blocks[0]["type"] == "markdown"
+    assert blocks[0]["text"] == "Go to <#C0B7QPVMTEH> here."
+
+
+def test_list_mention_round_trips_to_live_token_in_fallback() -> None:
+    # The plain-text fallback re-emits the canonical token so a downgraded
+    # mrkdwn fallback still links and notifies.
+    blocks = convert_markdown_to_slack_blocks("- owner <@U123ABC> in <#C0ENG>")
+    fallback = build_fallback_text_from_blocks(blocks)
+
+    assert "<@U123ABC>" in fallback
+    assert "<#C0ENG>" in fallback

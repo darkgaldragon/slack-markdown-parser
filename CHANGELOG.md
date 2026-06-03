@@ -6,6 +6,10 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 ## [Unreleased]
 
+### Fixed
+
+- Stopped Slack mention tokens from rendering as literal text inside promoted list items. Since 2.4.0 a simple list is emitted as a `rich_text` block, but the inline builder only tokenized links, code, and emphasis — so a `<#C123>` / `<@U123>` / `<!subteam^S123>` / `<!here>` token in a list item fell through as a plain `text` run. In a `rich_text` block a mention has to be a structured element (`channel`, `user`, `usergroup`, `broadcast`), so Slack showed the raw `<#C123>` rather than a pill. (Prose was unaffected: it stays in a `markdown` block, where Slack resolves the token itself.) These tokens are now converted to the matching rich_text elements, an optional `|label` display suffix is dropped (Slack renders the element from the id), and the plain-text fallback re-emits the canonical `<#C123>` token so a downgraded mrkdwn fallback still links and notifies.
+
 ## [2.4.3] - 2026-05-29
 
 ### Fixed
