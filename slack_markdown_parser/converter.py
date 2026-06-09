@@ -1368,9 +1368,26 @@ def _create_rich_text_inline_elements(
                 content = content[1:-1]
                 style["italic"] = True
 
-            element = {"type": "text", "text": content}
-            if style:
-                element["style"] = style
+            # A link wrapped entirely in emphasis (``**[text](url)**``) is matched
+            # by the emphasis branch above, not the link branch, so its inner
+            # content is a bare ``[text](url)``. Emit a styled ``link`` element
+            # rather than a literal text run, otherwise the link is dead in Slack.
+            inner_link = (
+                TABLE_TOKEN_PATTERN.fullmatch(content)
+                if style and not style.get("code")
+                else None
+            )
+            if inner_link is not None and inner_link.group("markdown_url"):
+                element = {
+                    "type": "link",
+                    "url": inner_link.group("markdown_url"),
+                    "text": inner_link.group("markdown_label"),
+                    "style": style,
+                }
+            else:
+                element = {"type": "text", "text": content}
+                if style:
+                    element["style"] = style
         elements.append(element)
         last_index = match.end()
 
