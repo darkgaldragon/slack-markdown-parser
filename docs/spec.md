@@ -81,6 +81,7 @@ Slack still controls when those newer features appear and how they look, so trea
   - simple one-level quotes to `rich_text_quote`
   - simple bullet and ordered lists to `rich_text_list`
     - Lists are promoted only when the list starts at the beginning of the text region or after a blank line, each non-blank line in the run is a list item, the list does not use ambiguous 1-3-space nested indentation, the item text does not rely on Markdown backslash escapes, and the run is not followed by an indented continuation paragraph.
+    - Slack mention tokens inside a promoted list item are converted to their structured `rich_text` elements — `<@U…>`/`<@W…>` to `user`, `<#C…>`/`<#G…>` to `channel`, `<!subteam^S…>` to `usergroup`, and `<!here>`/`<!channel>`/`<!everyone>` to `broadcast` — since a `rich_text` block does not resolve a raw token. An optional `|label` display suffix is dropped (Slack renders the element from the id).
 - Table-like rows inside fenced code blocks are kept out of table parsing
 - Internal blank lines can optionally be rewritten into placeholder lines so Slack keeps visible paragraph separation
 - Unsupported Slack angle-bracket tokens such as `<foo>` or raw HTML-like tags are neutralized

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from slack_markdown_parser import (
     add_zero_width_spaces_to_markdown,
     blocks_to_plain_text,
@@ -1371,3 +1373,155 @@ def test_plain_bold_without_link_stays_text() -> None:
         if el.get("type") == "text" and el.get("style") == {"bold": True}
     )
     assert bold["text"] == "just bold text"
+
+
+def _list_section_elements(blocks: list[dict]) -> list[dict]:
+    """Return the inline elements of the first rich_text_list's first item."""
+    rich = next(block for block in blocks if block.get("type") == "rich_text")
+    rich_list = rich["elements"][0]
+    assert rich_list["type"] == "rich_text_list"
+    return rich_list["elements"][0]["elements"]
+
+
+def test_channel_mention_in_list_becomes_channel_element() -> None:
+    # A list is promoted to a rich_text block, where a `<#C…>` token must be a
+    # structured `channel` element — otherwise Slack renders it as literal text.
+    blocks = convert_markdown_to_slack_blocks("- *Channel:* <#C0B7QPVMTEH>")
+    elements = _list_section_elements(blocks)
+
+    assert {"type": "channel", "channel_id": "C0B7QPVMTEH"} in elements
+
+
+def test_user_mention_in_list_becomes_user_element() -> None:
+    blocks = convert_markdown_to_slack_blocks("- owner <@U123ABC>")
+    elements = _list_section_elements(blocks)
+
+    assert elements[-1] == {"type": "user", "user_id": "U123ABC"}
+
+
+def test_user_group_and_broadcast_mentions_in_list() -> None:
+    blocks = convert_markdown_to_slack_blocks("- ping <!subteam^S999>\n- alert <!here>")
+    rich_list = next(b for b in blocks if b.get("type") == "rich_text")["elements"][0]
+    first = rich_list["elements"][0]["elements"]
+    second = rich_list["elements"][1]["elements"]
+
+    assert {"type": "usergroup", "usergroup_id": "S999"} in first
+    assert {"type": "broadcast", "range": "here"} in second
+
+
+def test_mention_label_is_dropped_in_list() -> None:
+    # `<#C…|name>` carries a display label; Slack renders the element from the
+    # id, so the label is dropped rather than leaked into the output.
+    blocks = convert_markdown_to_slack_blocks("1. see <#C0ENG|general> and <@W42|bob>")
+    elements = _list_section_elements(blocks)
+
+    assert {"type": "channel", "channel_id": "C0ENG"} in elements
+    assert {"type": "user", "user_id": "W42"} in elements
+    assert all("general" not in str(element) for element in elements)
+
+
+def test_mention_in_prose_stays_in_markdown_block() -> None:
+    # Prose is not promoted, so the mention rides in a `markdown` block where
+    # Slack resolves it — no rich_text element is created.
+    blocks = convert_markdown_to_slack_blocks("Go to <#C0B7QPVMTEH> here.")
+
+    assert blocks[0]["type"] == "markdown"
+    assert blocks[0]["text"] == "Go to <#C0B7QPVMTEH> here."
+
+
+def test_list_mention_round_trips_to_live_token_in_fallback() -> None:
+    # The plain-text fallback re-emits the canonical token so a downgraded
+    # mrkdwn fallback still links and notifies.
+    blocks = convert_markdown_to_slack_blocks("- owner <@U123ABC> in <#C0ENG>")
+    fallback = build_fallback_text_from_blocks(blocks)
+
+    assert "<@U123ABC>" in fallback
+    assert "<#C0ENG>" in fallback
+
+
+def test_table_cell_mention_round_trips_to_live_token_in_fallback() -> None:
+    # TABLE_TOKEN_PATTERN also feeds table cells, so a mention in a cell is a
+    # structured element with no "text" key. The cell plain-text extractor must
+    # go through the same downgrade path as rich_text sections, or the mention
+    # silently vanishes from the fallback.
+    md = "| Owner | Channel |\n| --- | --- |\n| <@U123ABC> | go to <#C0ENG> |"
+    blocks = convert_markdown_to_slack_blocks(md)
+    table = _first_table(blocks)
+
+    assert extract_plain_text_from_table_cell(table["rows"][1][0]) == "<@U123ABC>"
+    assert extract_plain_text_from_table_cell(table["rows"][1][1]) == "go to <#C0ENG>"
+
+    fallback = build_fallback_text_from_blocks(blocks)
+    assert "<@U123ABC>" in fallback
+    assert "go to <#C0ENG>" in fallback
+
+
+# --- Downgrade-parity matrix -------------------------------------------------
+# Every supported inline token must survive BOTH renderings of every context:
+# the block structure Slack renders, and the plain-text downgrades used for
+# notification fallbacks (`build_fallback_text_from_blocks`) and plain views
+# (`blocks_to_plain_text`). A new inline element type that misses one of the
+# downgrade paths fails here instead of silently dropping from notifications.
+
+MENTION_TOKEN_CASES = [
+    ("<@U123ABC>", {"type": "user", "user_id": "U123ABC"}),
+    ("<#C0ENG>", {"type": "channel", "channel_id": "C0ENG"}),
+    ("<!subteam^S999>", {"type": "usergroup", "usergroup_id": "S999"}),
+    ("<!here>", {"type": "broadcast", "range": "here"}),
+]
+
+
+@pytest.mark.parametrize(("token", "element"), MENTION_TOKEN_CASES)
+def test_mention_parity_in_prose(token: str, element: dict) -> None:
+    blocks = convert_markdown_to_slack_blocks(f"see {token} now")
+
+    assert blocks[0]["type"] == "markdown"
+    assert token in blocks[0]["text"]
+    assert token in build_fallback_text_from_blocks(blocks)
+    assert token in blocks_to_plain_text(blocks)
+
+
+@pytest.mark.parametrize(("token", "element"), MENTION_TOKEN_CASES)
+def test_mention_parity_in_list_item(token: str, element: dict) -> None:
+    blocks = convert_markdown_to_slack_blocks(f"- item {token} end")
+
+    assert element in _list_section_elements(blocks)
+    assert token in build_fallback_text_from_blocks(blocks)
+    assert token in blocks_to_plain_text(blocks)
+
+
+@pytest.mark.parametrize(("token", "element"), MENTION_TOKEN_CASES)
+def test_mention_parity_in_table_cell(token: str, element: dict) -> None:
+    blocks = convert_markdown_to_slack_blocks(f"| H |\n| --- |\n| x {token} y |")
+    cell = _first_table(blocks)["rows"][1][0]
+
+    assert element in cell["elements"][0]["elements"]
+    assert extract_plain_text_from_table_cell(cell) == f"x {token} y"
+    assert token in build_fallback_text_from_blocks(blocks)
+    assert token in blocks_to_plain_text(blocks)
+
+
+@pytest.mark.parametrize(
+    ("markdown_link", "label", "url"),
+    [
+        ("[docs](https://example.com/d)", "docs", "https://example.com/d"),
+        ("<https://example.com/p|portal>", "portal", "https://example.com/p"),
+    ],
+)
+def test_link_parity_in_list_and_table_cell(
+    markdown_link: str, label: str, url: str
+) -> None:
+    list_blocks = convert_markdown_to_slack_blocks(f"- open {markdown_link} now")
+    link = next(
+        e for e in _list_section_elements(list_blocks) if e.get("type") == "link"
+    )
+    assert link["url"] == url
+    assert link["text"] == label
+    assert label in build_fallback_text_from_blocks(list_blocks)
+
+    table_blocks = convert_markdown_to_slack_blocks(
+        f"| H |\n| --- |\n| open {markdown_link} now |"
+    )
+    cell = _first_table(table_blocks)["rows"][1][0]
+    assert extract_plain_text_from_table_cell(cell) == f"open {label} now"
+    assert label in build_fallback_text_from_blocks(table_blocks)
