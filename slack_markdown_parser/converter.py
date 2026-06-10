@@ -1453,12 +1453,11 @@ def extract_plain_text_from_table_cell(cell: dict[str, Any]) -> str:
             if not isinstance(element, dict):
                 continue
             if element.get("type") == "rich_text_section":
-                for child in element.get("elements", []):
-                    if isinstance(child, dict):
-                        if child.get("type") == "link":
-                            texts.append(str(child.get("text") or child.get("url", "")))
-                        else:
-                            texts.append(child.get("text", ""))
+                texts.append(
+                    _rich_text_inline_elements_to_plain_text(
+                        element.get("elements", [])
+                    )
+                )
             elif "text" in element:
                 texts.append(str(element.get("text", "")))
         return "".join(texts)

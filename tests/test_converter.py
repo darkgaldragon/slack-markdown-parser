@@ -1357,3 +1357,20 @@ def test_list_mention_round_trips_to_live_token_in_fallback() -> None:
 
     assert "<@U123ABC>" in fallback
     assert "<#C0ENG>" in fallback
+
+
+def test_table_cell_mention_round_trips_to_live_token_in_fallback() -> None:
+    # TABLE_TOKEN_PATTERN also feeds table cells, so a mention in a cell is a
+    # structured element with no "text" key. The cell plain-text extractor must
+    # go through the same downgrade path as rich_text sections, or the mention
+    # silently vanishes from the fallback.
+    md = "| Owner | Channel |\n| --- | --- |\n| <@U123ABC> | go to <#C0ENG> |"
+    blocks = convert_markdown_to_slack_blocks(md)
+    table = _first_table(blocks)
+
+    assert extract_plain_text_from_table_cell(table["rows"][1][0]) == "<@U123ABC>"
+    assert extract_plain_text_from_table_cell(table["rows"][1][1]) == "go to <#C0ENG>"
+
+    fallback = build_fallback_text_from_blocks(blocks)
+    assert "<@U123ABC>" in fallback
+    assert "go to <#C0ENG>" in fallback
