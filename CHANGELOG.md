@@ -6,6 +6,8 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 ## [Unreleased]
 
+## [2.4.4] - 2026-06-10
+
 ### Fixed
 
 - Stopped a link wrapped entirely in emphasis (`**[text](url)**`, and the `*`/`_`/`__`/`~~`/`***` variants) from rendering as dead, literal text in `rich_text` contexts such as list items and table cells. The emphasis token pattern matched the whole `**[text](url)**` span before the link pattern got a chance, so `_create_rich_text_inline_elements` emitted the inner `[text](url)` as a styled plain-text run and the link was never clickable. When a styled (non-code) token's inner content is itself a complete markdown link, it now becomes a `link` element carrying that style (e.g. a bold link), matching the already-working emphasis-inside-the-brackets form (`[**text**](url)`).
