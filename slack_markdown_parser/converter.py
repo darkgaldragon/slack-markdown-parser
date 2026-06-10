@@ -84,6 +84,12 @@ LOOSE_TABLE_SEPARATOR_PATTERN = re.compile(
 TABLE_TOKEN_PATTERN = re.compile(
     r"\[(?P<markdown_label>[^\]\n]+)\]\((?P<markdown_url>https?://[^\s)]+)\)"
     r"|<(?P<angle_url>https?://[^>\s|]+)(?:\|(?P<angle_label>[^>\n]+))?>"
+    # Slack mention tokens: user (<@U…>/<@W…>), channel (<#C…>/<#G…>), user
+    # group (<!subteam^S…>), and broadcast (<!here>/<!channel>/<!everyone>).
+    # An optional ``|label`` is the human-readable display the author saw; the
+    # rich_text element is rendered by Slack from the id, so the label is dropped.
+    r"|<(?P<mention>@[UW][A-Z0-9]+|#[CG][A-Z0-9]+|!subteam\^[A-Z0-9]+"
+    r"|!(?:here|channel|everyone))(?:\|[^>\n]+)?>"
     r"|(?P<token>"
     r"(?P<code>(?P<code_delimiter>`+)(?P<code_text>[^\n]+?)(?P=code_delimiter))"
     r"|~~[^~]+~~"
@@ -1317,6 +1323,40 @@ def looks_like_markdown_table(text: str) -> bool:
     return table_like_lines >= 2
 
 
+def _slack_mention_element(mention: str) -> dict[str, Any]:
+    """Map a Slack mention token body to its rich_text element.
+
+    ``mention`` is the token interior without the angle brackets or ``|label``
+    (e.g. ``@U123``, ``#C123``, ``!subteam^S123``, ``!here``). Slack renders
+    these from the id alone, so no display text is carried.
+    """
+    sigil, body = mention[0], mention[1:]
+    if sigil == "@":
+        return {"type": "user", "user_id": body}
+    if sigil == "#":
+        return {"type": "channel", "channel_id": body}
+    if body.startswith("subteam^"):
+        return {"type": "usergroup", "usergroup_id": body[len("subteam^") :]}
+    return {"type": "broadcast", "range": body}
+
+
+def _slack_mention_element_to_token(element: dict[str, Any]) -> str:
+    """Inverse of :func:`_slack_mention_element` for plain-text fallbacks.
+
+    Emitting the canonical ``<#C…>`` / ``<@U…>`` token (rather than an empty
+    string) keeps the mention live when a rich_text block is downgraded to a
+    mrkdwn fallback, so it still links and notifies.
+    """
+    element_type = element.get("type")
+    if element_type == "user":
+        return f"<@{element.get('user_id', '')}>"
+    if element_type == "channel":
+        return f"<#{element.get('channel_id', '')}>"
+    if element_type == "usergroup":
+        return f"<!subteam^{element.get('usergroup_id', '')}>"
+    return f"<!{element.get('range', '')}>"
+
+
 def _create_rich_text_inline_elements(
     text: str, *, empty_text: str = ""
 ) -> list[dict[str, Any]]:
@@ -1340,6 +1380,7 @@ def _create_rich_text_inline_elements(
         markdown_url = match.group("markdown_url")
         angle_url = match.group("angle_url")
         angle_label = match.group("angle_label")
+        mention = match.group("mention")
         token = match.group("token") or ""
 
         if markdown_label and markdown_url:
@@ -1350,6 +1391,8 @@ def _create_rich_text_inline_elements(
                 "url": angle_url,
                 "text": angle_label or angle_url,
             }
+        elif mention:
+            element = _slack_mention_element(mention)
         else:
             style: dict[str, bool] = {}
             content = token
@@ -1410,12 +1453,11 @@ def extract_plain_text_from_table_cell(cell: dict[str, Any]) -> str:
             if not isinstance(element, dict):
                 continue
             if element.get("type") == "rich_text_section":
-                for child in element.get("elements", []):
-                    if isinstance(child, dict):
-                        if child.get("type") == "link":
-                            texts.append(str(child.get("text") or child.get("url", "")))
-                        else:
-                            texts.append(child.get("text", ""))
+                texts.append(
+                    _rich_text_inline_elements_to_plain_text(
+                        element.get("elements", [])
+                    )
+                )
             elif "text" in element:
                 texts.append(str(element.get("text", "")))
         return "".join(texts)
@@ -1482,6 +1524,8 @@ def _rich_text_inline_elements_to_plain_text(elements: list[dict[str, Any]]) -> 
         element_type = element.get("type")
         if element_type == "link":
             texts.append(str(element.get("text") or element.get("url", "")))
+        elif element_type in {"user", "channel", "usergroup", "broadcast"}:
+            texts.append(_slack_mention_element_to_token(element))
         else:
             texts.append(str(element.get("text", "")))
     return "".join(texts)
