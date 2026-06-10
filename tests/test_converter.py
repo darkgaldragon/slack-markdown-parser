@@ -1297,6 +1297,84 @@ def test_multi_backtick_code_span_keeps_pipe_inside_table_cell() -> None:
     assert code_cell["style"] == {"code": True}
 
 
+def _iter_inline_elements(blocks: list[dict]):
+    """Yield every inline (link/text) element nested anywhere in the blocks."""
+    stack = list(blocks)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            if node.get("type") in {"link", "text"}:
+                yield node
+            stack.extend(node.get("elements", []))
+        elif isinstance(node, list):
+            stack.extend(node)
+
+
+def _find_link(blocks: list[dict], url: str) -> dict | None:
+    return next(
+        (
+            el
+            for el in _iter_inline_elements(blocks)
+            if el.get("type") == "link" and el.get("url") == url
+        ),
+        None,
+    )
+
+
+def test_bold_wrapped_link_in_list_becomes_styled_link() -> None:
+    # ``**[text](url)**`` is matched by the emphasis branch, not the link branch,
+    # so without the fix the whole ``[text](url)`` survived as a literal bold text
+    # run and the link was dead in Slack. It should become a bold link element.
+    raw = "- **[#27375](https://example.com/issues?issueNumber=27375)** closed\n"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+    link = _find_link(blocks, "https://example.com/issues?issueNumber=27375")
+    assert link is not None
+    assert link["text"] == "#27375"
+    assert link["style"] == {"bold": True}
+
+
+def test_italic_wrapped_link_in_list_becomes_styled_link() -> None:
+    raw = "- *[Example](https://example.com)* trailing\n"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+    link = _find_link(blocks, "https://example.com")
+    assert link is not None
+    assert link["text"] == "Example"
+    assert link["style"] == {"italic": True}
+
+
+def test_strikethrough_wrapped_link_in_list_becomes_styled_link() -> None:
+    raw = "- ~~[Example](https://example.com)~~ trailing\n"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+    link = _find_link(blocks, "https://example.com")
+    assert link is not None
+    assert link["style"] == {"strike": True}
+
+
+def test_bare_link_in_list_still_works() -> None:
+    # The emphasis fix must not disturb a plain link (no surrounding emphasis).
+    raw = "- [Example](https://example.com) here\n"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+    link = _find_link(blocks, "https://example.com")
+    assert link is not None
+    assert "style" not in link
+
+
+def test_plain_bold_without_link_stays_text() -> None:
+    raw = "- **just bold text** here\n"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+    bold = next(
+        el
+        for el in _iter_inline_elements(blocks)
+        if el.get("type") == "text" and el.get("style") == {"bold": True}
+    )
+    assert bold["text"] == "just bold text"
+
+
 def _list_section_elements(blocks: list[dict]) -> list[dict]:
     """Return the inline elements of the first rich_text_list's first item."""
     rich = next(block for block in blocks if block.get("type") == "rich_text")
