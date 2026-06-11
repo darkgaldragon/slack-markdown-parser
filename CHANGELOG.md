@@ -6,6 +6,12 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-06-11
+
+### Fixed
+
+- Stopped a lone `<` in a table cell from swallowing later cell separators. The cell splitter tracked angle brackets with a stateful flag that any `<` turned on and only a `>` turned off, so a bare `<` with no closing `>` on the same line — a comparison like `x < y` or a threshold like `< 100ms`, both common in LLM-generated tables — silently merged the remaining cells into one, shifted the columns, and filled the lost trailing cell with `-`. Pipes are now protected only inside valid Slack angle tokens (links, mentions, `<!date^...>`), which are consumed whole; a bare `<` stays literal. The heading+table-row splitter shares the same scan, so a `# Heading |a|b|` line now also splits when the heading contains a lone `<`, and standalone `parse_markdown_table` / `normalize_markdown_tables` now match the sanitized pipeline's behavior.
+
 ## [2.5.0] - 2026-06-11
 
 ### Added
