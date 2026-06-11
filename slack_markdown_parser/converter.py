@@ -592,15 +592,25 @@ def _find_inline_code_span_end(text: str, start: int) -> int | None:
 
 
 def _transform_outside_inline_code(text: str, transform: Callable[[str], str]) -> str:
-    """Apply ``transform`` only to text outside inline code spans."""
+    """Apply ``transform`` only to text outside inline code spans.
+
+    Spans are bounded to a single line, matching this module's span model
+    (``INLINE_CODE_SPAN_PATTERN``). Without that bound, one stray backtick
+    would pair with a backtick on a much later line and silently suppress
+    sanitization for everything in between.
+    """
     parts: list[str] = []
     plain_start = 0
     cursor = text.find("`")
 
     while cursor != -1:
         span_end = _find_inline_code_span_end(text, cursor)
-        if span_end is None:
-            cursor = text.find("`", cursor + 1)
+        if span_end is None or "\n" in text[cursor:span_end]:
+            # No same-line closing run: the backticks are literal text.
+            delimiter_end = cursor
+            while delimiter_end < len(text) and text[delimiter_end] == "`":
+                delimiter_end += 1
+            cursor = text.find("`", delimiter_end)
             continue
         parts.append(transform(text[plain_start:cursor]))
         parts.append(text[cursor:span_end])

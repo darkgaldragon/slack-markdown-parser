@@ -987,6 +987,22 @@ def test_inline_code_preserves_html_tags_and_entities() -> None:
     assert blocks[0]["text"] == "A > B with `<div>` and `&amp;` and ＜foo＞ tag."
 
 
+def test_stray_backticks_across_lines_do_not_suppress_sanitization() -> None:
+    raw = "tick ` here\nProse &gt; and <foo> stay sanitized\nanother ` tick"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert "Prose > and ＜foo＞ stay sanitized" in blocks[0]["text"]
+
+
+def test_same_line_inline_code_still_protected_with_stray_backtick_nearby() -> None:
+    raw = "stray ` tick\nuse `<div>` here"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert "`<div>`" in blocks[0]["text"]
+
+
 def test_placeholder_injection_does_not_crash_or_steal_spans() -> None:
     blocks = convert_markdown_to_slack_blocks("attack \ufff0code0\ufff1 here")
     assert blocks[0]["text"] == "attack code0 here"
