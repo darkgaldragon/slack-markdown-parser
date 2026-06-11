@@ -138,6 +138,7 @@ LLMs often emit tables with omitted outer pipes, missing separator rows, or inco
 - Treat pipes inside Slack links such as `<url|text>` as literal content, not as cell separators
 - Treat pipes inside inline code `` `...` `` as literal content, not as cell separators
 - Treat escaped pipes `\|` as literal content and remove the backslash in the final displayed text
+- Only valid Slack angle tokens (links, mentions, `<!date^...>`) open a pipe-protected region; a bare `<` — such as the comparison in `x < y` or a threshold like `< 100ms` — stays literal and does not swallow later cell separators
 
 ## Table cell styling
 

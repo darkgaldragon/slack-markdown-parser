@@ -1193,8 +1193,26 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, list[int]]:
 add_zero_width_spaces = add_zero_width_spaces_to_markdown
 
 
+def _match_slack_angle_token_end(text: str, start: int) -> int | None:
+    """Return the end index (exclusive) of a valid Slack angle token at ``start``.
+
+    Only recognized Slack tokens (links, mentions, ``<!date^…>``) protect
+    their inner pipes from cell splitting. A bare ``<`` — e.g. the comparison
+    in ``x < y`` — is literal text and must not open a protected region;
+    a stateful "inside angle brackets" flag did exactly that, so one lone
+    ``<`` swallowed every later pipe on the line into a single cell.
+    """
+    if start >= len(text) or text[start] != "<":
+        return None
+    closing = text.find(">", start + 1)
+    if closing == -1:
+        return None
+    token = text[start : closing + 1]
+    return closing + 1 if _is_allowed_slack_angle_token(token) else None
+
+
 def _split_markdown_table_cells(line: str) -> list[str]:
-    """Split markdown table cells while preserving pipes inside <...|...> links."""
+    """Split markdown table cells while preserving pipes inside Slack tokens."""
     working = line.strip()
     if not working:
         return []
@@ -1206,7 +1224,6 @@ def _split_markdown_table_cells(line: str) -> list[str]:
 
     cells: list[str] = []
     current: list[str] = []
-    in_angle = False
     escaped = False
     cursor = 0
 
@@ -1232,11 +1249,13 @@ def _split_markdown_table_cells(line: str) -> list[str]:
                 continue
 
         if ch == "<":
-            in_angle = True
-        elif ch == ">" and in_angle:
-            in_angle = False
+            token_end = _match_slack_angle_token_end(working, cursor)
+            if token_end is not None:
+                current.append(working[cursor:token_end])
+                cursor = token_end
+                continue
 
-        if ch == "|" and not in_angle:
+        if ch == "|":
             cells.append("".join(current).strip())
             current = []
             cursor += 1
@@ -1281,7 +1300,6 @@ def _split_heading_and_table_row(
     if "|" not in line:
         return None
 
-    in_angle = False
     escaped = False
     first_pipe = -1
     cursor = 0
@@ -1301,10 +1319,11 @@ def _split_heading_and_table_row(
                 cursor = code_span_end
                 continue
         if ch == "<":
-            in_angle = True
-        elif ch == ">" and in_angle:
-            in_angle = False
-        elif ch == "|" and not in_angle:
+            token_end = _match_slack_angle_token_end(line, cursor)
+            if token_end is not None:
+                cursor = token_end
+                continue
+        if ch == "|":
             first_pipe = cursor
             break
         cursor += 1
