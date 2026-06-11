@@ -32,7 +32,7 @@ If Slack itself does not support a construct in `markdown` blocks, this library 
 - Promote safe standalone Markdown constructs into richer Block Kit blocks: `image`, `divider`, and `rich_text`
 - Repair common LLM table issues such as missing outer pipes, missing separator rows, mismatched column counts, and empty cells
 - Split output into multiple Slack messages when needed to satisfy Slack's "one table per message" and per-message block-count constraints
-- Remove ANSI/control characters and neutralize invalid Slack angle-bracket tokens before block generation
+- Remove ANSI/control characters and reserved internal marker code points, and neutralize invalid Slack angle-bracket tokens in prose while keeping fenced code blocks and inline code spans verbatim
 - Add zero-width spaces around inline formatting markers to reduce rendering issues outside fenced code blocks, while preserving English-like punctuation-only boundaries that Slack already renders reliably
 - Add visible spaces for a small set of nested inline-code cases in dense Japanese, Chinese, and Korean text when zero-width spaces alone are not enough
 - Support Markdown links and Slack-style links inside table cells
@@ -85,7 +85,7 @@ What this library compensates for:
 - Converts unambiguous standalone Markdown constructs into native Block Kit blocks when that is safer than relying on raw `markdown` rendering
 - Keeps table-like rows inside fenced code blocks out of table normalization
 - Optionally turns internal blank lines into placeholder lines that keep paragraphs visibly separated in Slack `markdown` blocks
-- Neutralizes invalid Slack angle-bracket tokens such as raw HTML-like tags
+- Neutralizes invalid Slack angle-bracket tokens such as raw HTML-like tags in prose, while code regions keep their content verbatim
 
 ## Requirements
 
@@ -196,8 +196,8 @@ Slack Markdown rendering or keep list formatting open in some clients.
 |---|---|
 | `normalize_markdown_tables(markdown_text) -> str` | Normalize Markdown table syntax before conversion. |
 | `add_zero_width_spaces_to_markdown(text) -> str` | Insert zero-width spaces around formatting tokens where Slack needs stronger boundaries. |
-| `decode_html_entities(text) -> str` | Decode HTML entities before parsing. |
-| `sanitize_slack_text(text) -> str` | Remove ANSI/control noise and neutralize invalid Slack angle-bracket tokens. |
+| `decode_html_entities(text) -> str` | Decode HTML entities in prose before parsing; fenced code and inline code stay verbatim. |
+| `sanitize_slack_text(text) -> str` | Remove ANSI/control noise and reserved marker code points, and neutralize invalid Slack angle-bracket tokens outside code regions. |
 | `strip_zero_width_spaces(text) -> str` | Remove zero-width spaces (`U+200B`) and BOM (`U+FEFF`) while preserving join-control characters such as ZWJ. |
 
 ### Lower-level exported helpers
