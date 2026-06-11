@@ -1003,6 +1003,21 @@ def test_same_line_inline_code_still_protected_with_stray_backtick_nearby() -> N
     assert "`<div>`" in blocks[0]["text"]
 
 
+def test_lone_backtick_does_not_pair_with_longer_backtick_run() -> None:
+    raw = "` not code <foo> ``<code>``"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert "＜foo＞" in blocks[0]["text"]
+    assert "``<code>``" in blocks[0]["text"]
+
+
+def test_invalid_angle_token_spanning_inline_code_is_neutralized() -> None:
+    blocks = convert_markdown_to_slack_blocks("A <foo `bar` baz> B")
+
+    assert blocks[0]["text"] == "A ＜foo `bar` baz＞ B"
+
+
 def test_placeholder_injection_does_not_crash_or_steal_spans() -> None:
     blocks = convert_markdown_to_slack_blocks("attack \ufff0code0\ufff1 here")
     assert blocks[0]["text"] == "attack code0 here"

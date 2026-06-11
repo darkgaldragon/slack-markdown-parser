@@ -580,25 +580,48 @@ def _is_allowed_slack_angle_token(token: str) -> bool:
 
 
 def _find_inline_code_span_end(text: str, start: int) -> int | None:
+    """Find the end of the inline code span opened at ``start``.
+
+    Per CommonMark, a code span closes only with a backtick run of *equal*
+    length: a lone `` ` `` must not pair with the first backtick of a later
+    ``` `` ``` run. Runs of a different length are skipped whole.
+    """
     delimiter_end = start
     while delimiter_end < len(text) and text[delimiter_end] == "`":
         delimiter_end += 1
+    delimiter_length = delimiter_end - start
 
-    delimiter = text[start:delimiter_end]
-    closing = text.find(delimiter, delimiter_end)
-    if closing == -1:
-        return None
-    return closing + len(delimiter)
+    cursor = delimiter_end
+    while True:
+        closing = text.find("`", cursor)
+        if closing == -1:
+            return None
+        run_end = closing
+        while run_end < len(text) and text[run_end] == "`":
+            run_end += 1
+        if run_end - closing == delimiter_length:
+            return run_end
+        cursor = run_end
 
 
 def _transform_outside_inline_code(text: str, transform: Callable[[str], str]) -> str:
-    """Apply ``transform`` only to text outside inline code spans.
+    """Apply ``transform`` to text while keeping inline code spans verbatim.
 
     Spans are bounded to a single line, matching this module's span model
     (``INLINE_CODE_SPAN_PATTERN``). Without that bound, one stray backtick
     would pair with a backtick on a much later line and silently suppress
     sanitization for everything in between.
+
+    Spans are replaced with placeholder tokens (which contain no backticks or
+    angle brackets) rather than split out, so the transform still sees any
+    construct that *spans* a code span — e.g. an invalid angle token such as
+    ``<foo `bar` baz>`` is neutralized as a whole while the span content
+    itself stays verbatim. Reserved marker code points are stripped from the
+    input first, so crafted input cannot collide with the placeholders.
     """
+    text = INTERNAL_MARKER_CHAR_PATTERN.sub("", text)
+
+    spans: list[str] = []
     parts: list[str] = []
     plain_start = 0
     cursor = text.find("`")
@@ -612,13 +635,22 @@ def _transform_outside_inline_code(text: str, transform: Callable[[str], str]) -
                 delimiter_end += 1
             cursor = text.find("`", delimiter_end)
             continue
-        parts.append(transform(text[plain_start:cursor]))
-        parts.append(text[cursor:span_end])
+        parts.append(text[plain_start:cursor])
+        parts.append(f"\ufff0code{len(spans)}\ufff1")
+        spans.append(text[cursor:span_end])
         plain_start = span_end
         cursor = text.find("`", span_end)
 
-    parts.append(transform(text[plain_start:]))
-    return "".join(parts)
+    parts.append(text[plain_start:])
+    transformed = transform("".join(parts))
+
+    if not spans:
+        return transformed
+    placeholder_map = {f"\ufff0code{idx}\ufff1": span for idx, span in enumerate(spans)}
+    return INLINE_CODE_PLACEHOLDER_PATTERN.sub(
+        lambda match: placeholder_map.get(match.group(0), match.group(0)),
+        transformed,
+    )
 
 
 def _transform_outside_code_regions(text: str, transform: Callable[[str], str]) -> str:
