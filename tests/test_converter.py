@@ -19,7 +19,11 @@ from slack_markdown_parser import (
     normalize_underscore_emphasis,
     sanitize_slack_text,
 )
-from slack_markdown_parser.converter import normalize_bare_urls_for_slack_markdown
+from slack_markdown_parser.converter import (
+    _block_text_size,
+    _estimate_markdown_expansion_items,
+    normalize_bare_urls_for_slack_markdown,
+)
 
 
 def _first_table(blocks: list[dict]) -> dict:
@@ -112,6 +116,188 @@ def test_promoted_blocks_are_split_at_slack_block_limit() -> None:
 
     assert [len(message) for message in messages] == [50, 5]
     assert all(block["type"] == "image" for message in messages for block in message)
+
+
+def test_long_document_is_split_into_markdown_blocks_within_limit() -> None:
+    raw = "\n\n".join(
+        f"Paragraph {index} with **bold** text and `code` plus 日本語の**強調**も含む文章です。"
+        for index in range(900)
+    )
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) > 1
+    assert all(block["type"] == "markdown" for block in blocks)
+    assert all(len(block["text"]) <= 12000 for block in blocks)
+    rebuilt = "\n\n".join(build_fallback_text_from_blocks([block]) for block in blocks)
+    assert rebuilt == raw
+    messages = convert_markdown_to_slack_messages(raw)
+    for message in messages:
+        assert sum(_block_text_size(block) for block in message) <= 13200
+
+
+def test_document_under_markdown_length_limit_is_not_split() -> None:
+    raw = "\n\n".join(f"para {index}" for index in range(50))
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) == 1
+
+
+def test_single_paragraph_without_blank_lines_is_split_at_line_boundaries() -> None:
+    raw = "\n".join(
+        f"line {index} continues without blank separation" for index in range(600)
+    )
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) > 1
+    assert all(len(block["text"]) <= 12000 for block in blocks)
+    rebuilt_lines = [line for block in blocks for line in block["text"].split("\n")]
+    assert rebuilt_lines == raw.split("\n")
+
+
+def test_single_overlong_line_is_split_at_word_boundaries() -> None:
+    raw = ("word " * 5000).strip()
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) > 1
+    assert all(len(block["text"]) <= 12000 for block in blocks)
+    assert all(set(block["text"].split()) == {"word"} for block in blocks)
+
+
+def test_cjk_line_without_spaces_is_hard_split_within_limit() -> None:
+    raw = "あ" * 20000
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) > 1
+    assert all(len(block["text"]) <= 12000 for block in blocks)
+    assert "".join(block["text"] for block in blocks) == raw
+
+
+def test_dense_emphasis_inflation_is_resplit_within_limit() -> None:
+    # Raw length fits the packing target, but ZWSP insertion inflates the
+    # formatted text past the hard limit, forcing the shrink-and-retry path.
+    raw = ("**注:**あ " * 1400).strip()
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) > 1
+    assert all(len(block["text"]) <= 12000 for block in blocks)
+    # A split must never land inside an emphasis token.
+    assert all(block["text"].count("**") % 2 == 0 for block in blocks)
+
+
+def test_unclosed_fence_split_reopens_fence_in_continuation() -> None:
+    raw = "```python\n" + "\n".join(
+        f"print({index})  # long code line for splitting" for index in range(500)
+    )
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) > 1
+    assert all(block["type"] == "markdown" for block in blocks)
+    assert all(len(block["text"]) <= 12000 for block in blocks)
+    assert all(block["text"].startswith("```python") for block in blocks[1:])
+
+
+def test_long_document_split_respects_preserve_visual_blank_lines() -> None:
+    raw = "\n\n".join(
+        f"paragraph {index} with enough text to need splitting\n\ncontinued"
+        for index in range(500)
+    )
+
+    blocks = convert_markdown_to_slack_blocks(raw, preserve_visual_blank_lines=True)
+
+    assert len(blocks) > 1
+    assert all(len(block["text"]) <= 12000 for block in blocks)
+    assert any("\u00a0" in block["text"] for block in blocks)
+
+
+def test_expansion_item_estimate_matches_measured_slack_model() -> None:
+    estimate = _estimate_markdown_expansion_items
+
+    # Measured against a real workspace on 2026-06-11 (see converter.py):
+    assert estimate("\n\n".join(f"para {i}" for i in range(60))) == 1
+    assert estimate("\n".join(f"- item {i}" for i in range(60))) == 1
+    assert estimate("\n\n".join(f"```\ncode {i}\n```" for i in range(52))) == 1
+    assert estimate("\n\n".join(f"> quote {i}" for i in range(52))) == 1
+    assert estimate("\n\n".join(f"## h{i}" for i in range(50))) == 50
+    assert estimate("\n\n".join("---" for _ in range(52))) == 52
+    assert estimate("\n\n".join(f"## h{i}\n\npara {i}" for i in range(26))) == 52
+
+
+def test_heading_dense_document_respects_expansion_budget() -> None:
+    raw = "\n\n".join(f"## 見出し{index}" for index in range(120))
+
+    messages = convert_markdown_to_slack_messages(raw)
+
+    assert len(messages) >= 3
+    for message in messages:
+        weight = sum(
+            (
+                _estimate_markdown_expansion_items(block["text"])
+                if block["type"] == "markdown"
+                else 1
+            )
+            for block in message
+        )
+        assert weight <= 50
+
+
+def test_heading_paragraph_document_respects_expansion_budget() -> None:
+    raw = "\n\n".join(
+        f"## セクション{index}\n\n本文{index}の説明テキストです。"
+        for index in range(60)
+    )
+
+    messages = convert_markdown_to_slack_messages(raw)
+
+    assert len(messages) >= 3
+    for message in messages:
+        weight = sum(
+            (
+                _estimate_markdown_expansion_items(block["text"])
+                if block["type"] == "markdown"
+                else 1
+            )
+            for block in message
+        )
+        assert weight <= 50
+    rebuilt = "\n\n".join(
+        build_fallback_text_from_blocks(message) for message in messages
+    )
+    assert rebuilt == raw
+
+
+def test_message_total_block_text_respects_measured_budget() -> None:
+    # Measured 2026-06-11: one message's blocks may carry at most 13,200
+    # characters of text in total (msg_blocks_too_long beyond that).
+    raw = "巨大単一段落: " + (
+        "空行を含まない長い日本語の段落です。**強調**や`コード`も混ざります。" * 400
+    )
+
+    messages = convert_markdown_to_slack_messages(raw)
+
+    assert len(messages) >= 2
+    for message in messages:
+        assert sum(_block_text_size(block) for block in message) <= 13200
+
+
+def test_split_blocks_by_table_packs_by_total_text_size() -> None:
+    big = {"type": "markdown", "text": "A" * 11900}
+    small = {"type": "markdown", "text": "B" * 1400}
+    halves = [
+        {"type": "markdown", "text": "C" * 6000},
+        {"type": "markdown", "text": "D" * 6000},
+    ]
+
+    from slack_markdown_parser import split_blocks_by_table
+
+    assert [len(m) for m in split_blocks_by_table([big, small])] == [1, 1]
+    assert [len(m) for m in split_blocks_by_table(halves)] == [2]
 
 
 def test_callout_quote_uses_supported_rich_text_quote() -> None:

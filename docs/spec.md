@@ -33,6 +33,7 @@ When exact Markdown fidelity conflicts with Slack readability, readable Slack ou
    - Table regions: parse inline cell styling and generate a `table` block. If conversion fails, such as when there are fewer than two candidate lines or the parse result is empty, fall back to a `markdown` block.
    - Non-table regions: first promote safe standalone Markdown constructs into richer Block Kit blocks, then add zero-width spaces where needed and generate `markdown` blocks for the remaining text.
    - If `preserve_visual_blank_lines=True`, replace internal blank lines in remaining `markdown` blocks with lines that contain only a non-breaking space before emitting the `markdown` block.
+   - A remaining region whose formatted text would exceed Slack's 12,000-character `markdown` block limit is split into multiple `markdown` blocks using the rules in "Markdown block length splitting" below.
 
 `convert_markdown_to_slack_messages` then splits the resulting block list to satisfy the "one table per message" rule and Slack's per-message block-count limit.
 `convert_markdown_to_slack_payloads` returns the same split blocks plus preview `text` values ready for `chat.postMessage`.
@@ -212,6 +213,25 @@ Exception:
 |---|---|---|
 | `U+200C` | ZWNJ (zero-width non-joiner) | Used for word-shape control in languages such as Persian and Hindi |
 | `U+200D` | ZWJ (zero-width joiner) | Required for joined emoji and other grapheme composition |
+
+## Markdown block size splitting
+
+Three Slack-side hard limits were measured against a real workspace on 2026-06-11:
+
+- A `markdown` block's `text` accepts exactly 12,000 characters; 12,001 fails the whole `chat.postMessage` call with `msg_too_long`.
+- Slack expands `markdown` blocks server-side into native blocks and enforces "no more than 50 items" on the expanded result per message (`invalid_blocks`). Each heading and each thematic break becomes its own item (50 headings were accepted, 51 rejected; 30 headings in each of two blocks were rejected together), while paragraphs, lists, quotes, and fenced code merge into one item per contiguous run between those breakers (60 blank-separated paragraphs and 52 fences were accepted). Blank lines alone do not split a run.
+- One message's blocks may carry at most 13,200 characters of text in total — exactly 1.1 × the single-block limit; 13,201 fails with `msg_blocks_too_long`. The total counts content across block types (a 11,900-character `markdown` block plus a 1,400-character `rich_text` was rejected).
+
+Long or heading-dense non-table regions are therefore split before delivery:
+
+- The whole region is tried as a single block first; splitting happens only when the formatted text exceeds the character limit or the estimated expansion exceeds the per-message item budget
+- Raw content is packed toward targets below the hard limits (11,500 characters, 45 estimated items), because zero-width-space insertion and placeholder lines inflate the formatted text and the item estimate is intentionally conservative
+- Split points prefer paragraph boundaries (blank-line runs outside fenced code); the blank run at a chosen boundary is dropped, since adjacent Slack blocks already render visually separated
+- A single paragraph longer than the budget is split at line boundaries, and a single overlong line at word boundaries, with a hard cut when no space exists (for example dense CJK text)
+- When a cut lands inside an unclosed fenced code block, the continuation block re-opens the fence with the original delimiter line so both halves keep rendering as code
+- Each piece is re-checked after formatting; when it still exceeds a hard limit, the packing budgets shrink and the piece is split again
+- `convert_markdown_to_slack_messages` additionally packs blocks into messages so that the summed expansion estimate stays within the 50-item budget (non-`markdown` blocks count as one item each) and the summed block text stays within the 13,200-character per-message total
+- The top-level fallback `text` field is not subject to the character limit (Slack truncates it instead of rejecting), so preview text is left whole
 
 ## Optional blank-line visibility workaround
 
