@@ -32,6 +32,7 @@ If Slack itself does not support a construct in `markdown` blocks, this library 
 - Promote safe standalone Markdown constructs into richer Block Kit blocks: `image`, `divider`, and `rich_text`
 - Repair common LLM table issues such as missing outer pipes, missing separator rows, mismatched column counts, and empty cells
 - Split output into multiple Slack messages when needed to satisfy Slack's "one table per message" and per-message block-count constraints
+- Split oversized Markdown text into multiple `markdown` blocks and messages, preferring paragraph boundaries, so output fits Slack's measured hard limits — 12,000 characters per `markdown` block (`msg_too_long`), 50 server-side expansion items per message where each heading or divider counts as one item (`invalid_blocks`), and 13,200 characters of total block text per message (`msg_blocks_too_long`)
 - Remove ANSI/control characters and reserved internal marker code points, and neutralize invalid Slack angle-bracket tokens in prose while keeping fenced code blocks and inline code spans verbatim
 - Add zero-width spaces around inline formatting markers to reduce rendering issues outside fenced code blocks, while preserving English-like punctuation-only boundaries that Slack already renders reliably
 - Add visible spaces for a small set of nested inline-code cases in dense Japanese, Chinese, and Korean text when zero-width spaces alone are not enough

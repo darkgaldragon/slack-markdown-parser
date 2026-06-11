@@ -116,6 +116,35 @@ ALLOWED_SLACK_ANGLE_TOKEN_PATTERNS = (
     re.compile(r"^<!date\^[^>\n]+>$"),
 )
 SLACK_MAX_BLOCKS_PER_MESSAGE = 50
+# Verified against a real Slack workspace (2026-06-11): a ``markdown`` block's
+# ``text`` accepts exactly 12,000 characters, while 12,001 fails the whole
+# chat.postMessage call with ``msg_too_long``. The top-level fallback ``text``
+# field is not subject to this limit (40,001 characters was accepted).
+SLACK_MAX_MARKDOWN_TEXT_LENGTH = 12000
+# Raw-content packing target used when an oversized markdown segment is split.
+# Formatting inflates text (ZWSP padding, NBSP blank-line placeholders), so
+# pieces are packed below the hard limit; the block builder re-splits any
+# piece whose *formatted* text still exceeds the hard limit.
+_MARKDOWN_SPLIT_TARGET_LENGTH = 11500
+# Slack expands a ``markdown`` block server-side into native blocks and then
+# enforces "no more than 50 items" on the expanded result *per message*.
+# Measured against a real workspace (2026-06-11): each heading and each
+# thematic break becomes its own item (50 headings accepted, 51 rejected;
+# 30 headings in each of two blocks rejected), while paragraphs, lists,
+# quotes, and fenced code merge into one item per run between those breakers
+# (60 blank-separated paragraphs and 52 fences were accepted).
+SLACK_MAX_EXPANSION_ITEMS_PER_MESSAGE = 50
+# Per-block packing target, leaving headroom for estimation error.
+_MARKDOWN_EXPANSION_ITEMS_TARGET = 45
+# Third measured hard limit (2026-06-11): the text carried by one message's
+# blocks *in total* — across block types; rich_text content counts too — may
+# not exceed 13,200 characters (= 1.1 × the single-block limit). 13,201
+# fails the whole call with ``msg_blocks_too_long``.
+SLACK_MAX_MESSAGE_BLOCKS_TEXT_LENGTH = 13200
+# Packing target, leaving headroom for structural fields the size proxy may
+# not count exactly.
+_MESSAGE_BLOCKS_TEXT_TARGET = 12800
+ATX_HEADING_PATTERN = re.compile(r"^[ \t]{0,3}#{1,6}(?:[ \t]|$)")
 
 
 def decode_html_entities(text: str) -> str:
@@ -1733,7 +1762,281 @@ def _create_markdown_block(
     block._plain_text = plain_text
     block._synthetic_space_indices = synthetic_indices
     block._synthetic_blank_line_indices = synthetic_blank_line_indices
+    block._expansion_items = _estimate_markdown_expansion_items(formatted)
     return block
+
+
+def _is_markdown_expansion_breaker_line(line: str) -> bool:
+    """Return True for lines Slack expands into their own top-level block.
+
+    ATX headings and thematic breaks each become one expansion item and end
+    the surrounding content run. A setext ``===`` underline is counted too;
+    that can over-count by one (heading text + underline), which only makes
+    the estimate conservative.
+    """
+    if ATX_HEADING_PATTERN.match(line):
+        return True
+    if _is_thematic_break_line(line):
+        return True
+    stripped = line.strip()
+    return bool(stripped) and set(stripped) == {"="}
+
+
+def _estimate_markdown_expansion_items(text: str) -> int:
+    """Estimate how many native blocks Slack expands this markdown text into.
+
+    Model measured against a real workspace (see the constants above): each
+    heading / thematic break is one item, and each maximal run of any other
+    content *between* those breakers is one item — blank lines inside a run
+    do not split it. Fenced lines always count as run content.
+    """
+    items = 0
+    in_run = False
+    for line, is_fenced, _ in _iter_fence_states(text.split("\n")):
+        if is_fenced:
+            if not in_run:
+                items += 1
+                in_run = True
+            continue
+        if not line.strip():
+            continue
+        if _is_markdown_expansion_breaker_line(line):
+            items += 1
+            in_run = False
+            continue
+        if not in_run:
+            items += 1
+            in_run = True
+    return max(1, items)
+
+
+def _split_text_at_blank_lines(text: str, max_length: int, max_items: int) -> list[str]:
+    """Greedily pack paragraph units into pieces within both budgets.
+
+    Units are separated by blank-line runs outside fenced code (blank lines
+    inside a fence never split). The blank run at a piece boundary is dropped
+    — adjacent Slack blocks already render separated — while blank runs
+    packed inside a piece are kept verbatim. A piece is closed when adding
+    the next unit would exceed ``max_length`` characters or ``max_items``
+    estimated expansion items. A single unit over either budget is returned
+    oversized; the caller splits it harder.
+    """
+    if (
+        len(text) <= max_length
+        and _estimate_markdown_expansion_items(text) <= max_items
+    ):
+        return [text]
+
+    units: list[list[str]] = []
+    content: list[str] = []
+    blanks: list[str] = []
+    for line, is_fenced, _ in _iter_fence_states(text.split("\n")):
+        if not is_fenced and not line.strip():
+            if content:
+                blanks.append(line)
+            else:
+                # Leading blank lines stay attached to the first unit.
+                content.append(line)
+            continue
+        if blanks:
+            units.append(content)
+            units.append(blanks)
+            content, blanks = [], []
+        content.append(line)
+    if content:
+        units.append(content)
+    if blanks:
+        units.append(blanks)
+
+    pieces: list[str] = []
+    current: list[str] = []
+    pending_blanks: list[str] = []
+    for index in range(0, len(units), 2):
+        unit = units[index]
+        candidate = current + (pending_blanks if current else []) + unit
+        candidate_text = "\n".join(candidate)
+        if current and (
+            len(candidate_text) > max_length
+            or _estimate_markdown_expansion_items(candidate_text) > max_items
+        ):
+            pieces.append("\n".join(current))
+            current = list(unit)
+        else:
+            current = candidate
+        pending_blanks = units[index + 1] if index + 1 < len(units) else []
+    if current:
+        pieces.append("\n".join(current))
+    return pieces
+
+
+def _split_single_line_to_length(line: str, max_length: int) -> list[str]:
+    """Split one overlong line, preferring a space boundary near the limit."""
+    parts: list[str] = []
+    while len(line) > max_length:
+        cut = line.rfind(" ", 1, max_length + 1)
+        if cut <= 0:
+            parts.append(line[:max_length])
+            line = line[max_length:]
+        else:
+            parts.append(line[:cut])
+            line = line[cut + 1 :]
+    parts.append(line)
+    return parts
+
+
+def _split_lines_to_length(text: str, max_length: int, max_items: int) -> list[str]:
+    """Split at line boundaries into pieces within both budgets.
+
+    Last-resort splitter for content that exceeds a budget without blank-line
+    split points (a single huge paragraph, a fence body, or a long run of
+    headings). When the cut lands inside an (unclosed) fence, the continuation
+    piece re-opens the fence with the original delimiter line so both pieces
+    keep rendering as code.
+    """
+    pieces: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    current_items = 0
+    in_run = False
+    active_fence_open: str | None = None
+
+    def flush(next_fence_prefix: str | None) -> None:
+        nonlocal current, current_len, current_items, in_run
+        if current:
+            pieces.append("\n".join(current))
+        if next_fence_prefix:
+            current = [next_fence_prefix]
+            current_len = len(next_fence_prefix)
+            current_items = 1
+            in_run = True
+        else:
+            current = []
+            current_len = 0
+            current_items = 0
+            in_run = False
+
+    for line, is_fenced, is_opening in _iter_fence_states(text.split("\n")):
+        if is_opening:
+            active_fence_open = line
+        elif not is_fenced:
+            active_fence_open = None
+
+        line_is_blank = not is_fenced and not line.strip()
+        line_is_breaker = (
+            not is_fenced
+            and not line_is_blank
+            and _is_markdown_expansion_breaker_line(line)
+        )
+
+        for part_index, part in enumerate(
+            [line]
+            if len(line) <= max_length
+            else _split_single_line_to_length(line, max_length)
+        ):
+            # Word-split continuations of a breaker line render as plain
+            # content, so only the first part keeps the breaker class.
+            is_breaker = line_is_breaker and part_index == 0
+            if line_is_blank:
+                part_items = 0
+            elif is_breaker:
+                part_items = 1
+            else:
+                part_items = 0 if in_run else 1
+
+            added = len(part) + (1 if current else 0)
+            if current and (
+                current_len + added > max_length
+                or current_items + part_items > max_items
+            ):
+                reopen = active_fence_open if active_fence_open != part else None
+                flush(reopen)
+                added = len(part) + (1 if current else 0)
+                if line_is_blank:
+                    part_items = 0
+                elif is_breaker:
+                    part_items = 1
+                else:
+                    part_items = 0 if in_run else 1
+            current.append(part)
+            current_len += added
+            current_items += part_items
+            if is_breaker:
+                in_run = False
+            elif not line_is_blank:
+                in_run = True
+
+    if current:
+        pieces.append("\n".join(current))
+    return pieces
+
+
+def _markdown_block_fits_slack_limits(block: dict[str, Any]) -> bool:
+    return (
+        len(block["text"]) <= SLACK_MAX_MARKDOWN_TEXT_LENGTH
+        and _estimate_markdown_expansion_items(block["text"])
+        <= SLACK_MAX_EXPANSION_ITEMS_PER_MESSAGE
+    )
+
+
+def _create_markdown_blocks(
+    content: str, *, preserve_visual_blank_lines: bool = False
+) -> list[dict[str, Any]]:
+    """Build ``markdown`` blocks that fit Slack's measured hard limits.
+
+    The whole content is tried as a single block first. Only when the
+    *formatted* text exceeds ``SLACK_MAX_MARKDOWN_TEXT_LENGTH`` or the
+    estimated server-side expansion exceeds the per-message item budget is
+    the raw content split — at paragraph boundaries when possible, then at
+    line/word boundaries — and each piece re-checked after formatting,
+    shrinking the packing budget geometrically until every block fits.
+    """
+
+    def build(piece: str) -> dict[str, Any] | None:
+        return _create_markdown_block(
+            piece, preserve_visual_blank_lines=preserve_visual_blank_lines
+        )
+
+    whole = build(content)
+    if whole is None:
+        return []
+    if _markdown_block_fits_slack_limits(whole):
+        return [whole]
+
+    blocks: list[dict[str, Any]] = []
+    worklist: list[tuple[str, int, int]] = [
+        (content, _MARKDOWN_SPLIT_TARGET_LENGTH, _MARKDOWN_EXPANSION_ITEMS_TARGET)
+    ]
+    while worklist:
+        piece, budget, items_budget = worklist.pop(0)
+        block = build(piece)
+        if block is None:
+            continue
+        if _markdown_block_fits_slack_limits(block):
+            blocks.append(block)
+            continue
+
+        sub_pieces = _split_text_at_blank_lines(piece, budget, items_budget)
+        if len(sub_pieces) == 1:
+            sub_pieces = _split_lines_to_length(piece, budget, items_budget)
+        if len(sub_pieces) > 1:
+            worklist = [(sub, budget, items_budget) for sub in sub_pieces] + worklist
+            continue
+        if budget > 256 or items_budget > 8:
+            # The piece fits the raw budgets but its *formatted* text overflows
+            # (ZWSP/NBSP inflation or estimation drift): shrink and retry.
+            worklist.insert(
+                0,
+                (
+                    piece,
+                    max(256, int(budget * 0.8)),
+                    max(8, int(items_budget * 0.8)),
+                ),
+            )
+            continue
+        # A floor-budget piece cannot exceed the hard limits, so this is
+        # unreachable; keep the block rather than loop forever.
+        blocks.append(block)
+    return blocks
 
 
 def _create_rich_text_block(
@@ -2028,12 +2331,12 @@ def _convert_markdown_text_segment_to_blocks(
             markdown_buffer.pop()
         if not markdown_buffer:
             return
-        markdown_block = _create_markdown_block(
-            "\n".join(markdown_buffer),
-            preserve_visual_blank_lines=preserve_visual_blank_lines,
+        blocks.extend(
+            _create_markdown_blocks(
+                "\n".join(markdown_buffer),
+                preserve_visual_blank_lines=preserve_visual_blank_lines,
+            )
         )
-        if markdown_block:
-            blocks.append(markdown_block)
         markdown_buffer = []
 
     while cursor < len(lines):
@@ -2140,10 +2443,59 @@ def convert_markdown_to_slack_blocks(
 convert_markdown_text_to_blocks = convert_markdown_to_slack_blocks
 
 
+def _block_expansion_weight(block: dict[str, Any]) -> int:
+    """Weight of one block against Slack's per-message expansion budget.
+
+    Slack expands ``markdown`` blocks server-side and enforces the 50-item
+    limit on the expanded result, so a markdown block counts as its estimated
+    expansion; every other block type posts as a single item.
+    """
+    if not isinstance(block, dict) or block.get("type") != "markdown":
+        return 1
+    annotated = getattr(block, "_expansion_items", None)
+    if isinstance(annotated, int) and annotated > 0:
+        return annotated
+    return _estimate_markdown_expansion_items(str(block.get("text", "")))
+
+
+_TEXT_SIZE_KEYS = frozenset({"text", "url", "alt_text", "image_url"})
+
+
+def _block_text_size(value: Any) -> int:
+    """Rough text payload of a block against the per-message total budget.
+
+    Slack's ``msg_blocks_too_long`` check counts content across block types
+    (a 11,900-char markdown block plus a 1,400-char rich_text was rejected),
+    so this sums every string under content-carrying keys, recursively.
+    """
+    if isinstance(value, dict):
+        total = 0
+        for key, sub in value.items():
+            if key in _TEXT_SIZE_KEYS and isinstance(sub, str):
+                total += len(sub)
+            else:
+                total += _block_text_size(sub)
+        return total
+    if isinstance(value, list):
+        return sum(_block_text_size(item) for item in value)
+    return 0
+
+
 def split_blocks_by_table(blocks: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-    """Split blocks to satisfy Slack table and per-message block constraints."""
+    """Split blocks to satisfy Slack table and per-message constraints.
+
+    A message holds at most one ``table`` block, at most
+    ``SLACK_MAX_BLOCKS_PER_MESSAGE`` posted blocks, at most
+    ``SLACK_MAX_EXPANSION_ITEMS_PER_MESSAGE`` estimated post-expansion items
+    (headings and thematic breaks inside ``markdown`` blocks count
+    individually toward that budget), and at most
+    ``SLACK_MAX_MESSAGE_BLOCKS_TEXT_LENGTH`` characters of block text in
+    total across block types.
+    """
     messages: list[list[dict[str, Any]]] = []
     current_message: list[dict[str, Any]] = []
+    current_weight = 0
+    current_text_size = 0
 
     for block in blocks or []:
         if isinstance(block, dict) and block.get("type") == "table":
@@ -2151,11 +2503,23 @@ def split_blocks_by_table(blocks: list[dict[str, Any]]) -> list[list[dict[str, A
                 messages.append(current_message)
             messages.append([block])
             current_message = []
+            current_weight = 0
+            current_text_size = 0
         else:
-            if len(current_message) >= SLACK_MAX_BLOCKS_PER_MESSAGE:
+            weight = _block_expansion_weight(block)
+            text_size = _block_text_size(block)
+            if current_message and (
+                len(current_message) >= SLACK_MAX_BLOCKS_PER_MESSAGE
+                or current_weight + weight > SLACK_MAX_EXPANSION_ITEMS_PER_MESSAGE
+                or current_text_size + text_size > _MESSAGE_BLOCKS_TEXT_TARGET
+            ):
                 messages.append(current_message)
                 current_message = []
+                current_weight = 0
+                current_text_size = 0
             current_message.append(block)
+            current_weight += weight
+            current_text_size += text_size
 
     if current_message:
         messages.append(current_message)
