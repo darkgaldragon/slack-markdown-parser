@@ -384,6 +384,54 @@ def test_empty_table_cell_is_filled_with_dash() -> None:
     assert extract_plain_text_from_table_cell(row[1]) == "-"
 
 
+def test_lone_lt_in_cell_does_not_swallow_following_pipes() -> None:
+    raw = """| 条件 | 結果 |
+|---|---|
+| x < y | ok |
+"""
+
+    table = _first_table(convert_markdown_to_slack_blocks(raw))
+    row = [extract_plain_text_from_table_cell(cell) for cell in table["rows"][1]]
+    assert row == ["x < y", "ok"]
+
+
+def test_lt_threshold_cells_keep_all_columns() -> None:
+    raw = """| 項目 | 目標 | 実測 |
+|---|---|---|
+| 応答時間 | < 100ms | 85ms |
+| エラー率 | < 1% | 0.3% |
+"""
+
+    table = _first_table(convert_markdown_to_slack_blocks(raw))
+    rows = [
+        [extract_plain_text_from_table_cell(cell) for cell in row]
+        for row in table["rows"]
+    ]
+    assert rows == [
+        ["項目", "目標", "実測"],
+        ["応答時間", "< 100ms", "85ms"],
+        ["エラー率", "< 1%", "0.3%"],
+    ]
+
+
+def test_slack_tokens_in_cells_still_protect_inner_pipes() -> None:
+    from slack_markdown_parser import parse_markdown_table
+
+    assert parse_markdown_table(
+        "| <https://example.com|click> | <!date^1234567890^{date}|fallback> |"
+    ) == [["<https://example.com|click>", "<!date^1234567890^{date}|fallback>"]]
+
+
+def test_heading_inline_table_splits_even_with_lone_lt_in_heading() -> None:
+    raw = """### threshold < limit |A|B|
+|1|2|
+"""
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+    table_blocks = [b for b in blocks if b.get("type") == "table"]
+    assert table_blocks, "heading+table line should still split into a table"
+
+
 def test_multiple_tables_are_split_into_multiple_messages() -> None:
     raw = """# Report
 
