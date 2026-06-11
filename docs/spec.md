@@ -10,7 +10,7 @@ This document describes how `slack-markdown-parser` converts Markdown into Slack
 ## Output
 
 - Slack Block Kit blocks (`markdown`, `table`, `rich_text`, `image`, and `divider`)
-- When the input contains multiple tables or many promoted blocks, a list of messages that satisfies the "one table per message" rule and Slack's per-message block-count limit
+- When the input contains multiple tables, many promoted blocks, or long content, a list of messages that satisfies the "one table per message" rule, Slack's per-message block-count limit, and the measured size limits described in "Markdown block size splitting"
 
 ## Design target
 
@@ -35,7 +35,7 @@ When exact Markdown fidelity conflicts with Slack readability, readable Slack ou
    - If `preserve_visual_blank_lines=True`, replace internal blank lines in remaining `markdown` blocks with lines that contain only a non-breaking space before emitting the `markdown` block.
    - A remaining region whose formatted text would exceed Slack's 12,000-character `markdown` block limit is split into multiple `markdown` blocks using the rules in "Markdown block length splitting" below.
 
-`convert_markdown_to_slack_messages` then splits the resulting block list to satisfy the "one table per message" rule and Slack's per-message block-count limit.
+`convert_markdown_to_slack_messages` then splits the resulting block list to satisfy the "one table per message" rule, Slack's per-message block-count limit, and the per-message expansion-item and total-text budgets described in "Markdown block size splitting".
 `convert_markdown_to_slack_payloads` returns the same split blocks plus preview `text` values ready for `chat.postMessage`.
 
 ## How Slack behaved in testing
@@ -98,6 +98,7 @@ Behavior of `sanitize_slack_text`:
 - Replace unsupported angle-bracket tokens such as `<foo>` with full-width brackets (`＜foo＞`) so Slack does not interpret them as malformed special syntax
 - This also applies to raw HTML-like tags such as `<div>` or `<span>`
 - Angle-token neutralization applies only outside fenced code blocks and inline code spans, so code samples such as `` `<div>` `` reach Slack verbatim; ANSI/control/marker removal applies everywhere because those characters are never legitimate content
+- For this purpose an inline code span is recognized within a single line only, and it closes only on a backtick run of the same length as the opener. A stray unpaired backtick therefore stays literal and cannot suppress sanitization of later lines, and an invalid angle token that spans a code span (`<foo `bar` baz>`) is still neutralized as a whole while the span content stays verbatim
 
 ## Underscore emphasis normalization rules
 

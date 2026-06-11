@@ -76,6 +76,7 @@ Slack 側の制約として残るもの:
 - フェンスドコード内の table 風行をテーブル処理から除外
 - 必要に応じて、内部空行を補助用の行に置き換えて段落の区切りを見えやすくする
 - 生 HTML 風タグなど、Slack の特殊記法としては無効な `<...>` 形式を散文中では無害化（コードフェンスとインラインコード内は原文のまま）
+- 実測した Slack のブロック文字数上限・メッセージ展開アイテム上限・メッセージテキスト総量上限を超える出力を分割し、`chat.postMessage` ごと失敗するのを防ぐ
 
 ## 利用前提
 
@@ -111,7 +112,7 @@ for payload in convert_markdown_to_slack_payloads(
     print(payload)
 ```
 
-`convert_markdown_to_slack_messages` は、複数テーブルを含む入力を Slack 制約に合わせて複数メッセージへ分割します。
+`convert_markdown_to_slack_messages` は、複数テーブルを含む入力に加えて、長文や見出しの多い内容が Slack のブロック・メッセージサイズ上限を超える場合も、自動的に複数メッセージへ分割します。
 Slack Web の新しい `markdown` 表示で段落間の余白が極端に小さい場合は、`preserve_visual_blank_lines=True` を使うと内部空行だけを見えやすく補えます。
 
 ## 入出力イメージ
@@ -161,7 +162,7 @@ QA | ~~保留~~ | Team C
 
 | 関数 | 説明 |
 |---|---|
-| `convert_markdown_to_slack_messages(markdown_text, *, preserve_visual_blank_lines=False) → list[list[dict]]` | Markdown をテーブル分割済みのメッセージ群に変換 |
+| `convert_markdown_to_slack_messages(markdown_text, *, preserve_visual_blank_lines=False) → list[list[dict]]` | Markdown を、テーブルと Slack の実測サイズ上限に沿って分割済みのメッセージ群に変換 |
 | `convert_markdown_to_slack_payloads(markdown_text, *, preserve_visual_blank_lines=False) → list[dict]` | `blocks` とプレビュー用 `text` を含む Slack 送信用データへ変換 |
 | `convert_markdown_to_slack_blocks(markdown_text, *, preserve_visual_blank_lines=False) → list[dict]` | Markdown を Block Kit ブロックのリストに変換 |
 | `build_fallback_text_from_blocks(blocks) → str` | `chat.postMessage.text` 用のプレビュー文字列を生成 |
@@ -176,6 +177,7 @@ QA | ~~保留~~ | Team C
 | 関数 | 説明 |
 |---|---|
 | `normalize_markdown_tables(markdown_text) → str` | テーブル記法を正規化（パイプ補完、区切り行生成、列数調整） |
+| `normalize_underscore_emphasis(text) → str` | `_..._` / `__...__` の underscore 装飾を Slack 互換の asterisk 装飾へ変換 |
 | `add_zero_width_spaces_to_markdown(text) → str` | 装飾記号の前後にゼロ幅スペースを挿入（フェンスドコードブロック内は除外） |
 | `decode_html_entities(text) → str` | 散文中の HTML エンティティをデコード（コード領域は原文のまま） |
 | `sanitize_slack_text(text) → str` | ANSI / 制御文字 / 内部マーカー文字を除去し、コード領域外の不正な Slack 角括弧トークンを無害化 |

@@ -6,6 +6,18 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-06-11
+
+### Added
+
+- Added automatic size splitting so long or heading-dense LLM output no longer fails `chat.postMessage` outright. Three Slack-side hard limits were measured against a real workspace on 2026-06-11 and are now enforced at conversion time: a `markdown` block's `text` accepts exactly 12,000 characters (`msg_too_long` beyond that); Slack expands `markdown` blocks server-side and enforces "no more than 50 items" per message on the expanded result (`invalid_blocks`), where each heading and each thematic break is one item while paragraph/list/quote/fence runs between them merge into one; and one message's blocks may carry at most 13,200 characters of text in total across block types (`msg_blocks_too_long`). Oversized regions are split preferring paragraph boundaries, then line and word boundaries, with a hard cut as a last resort for space-less CJK; a cut inside an unclosed fence re-opens the fence in the continuation block so both halves keep rendering as code. Pieces are re-checked after ZWSP/NBSP formatting and re-split with shrinking budgets when they still overflow. `convert_markdown_to_slack_messages` packs blocks under all three budgets in addition to the existing one-table-per-message rule; documents already within every limit are returned unchanged. Note that the same input can now produce more blocks and more messages than 2.4.x when it previously exceeded Slack's limits (which used to fail delivery entirely).
+
+### Fixed
+
+- Stopped corrupting code samples during sanitization. `decode_html_entities` and the angle-token neutralization inside `sanitize_slack_text` ran over the whole text, so a fenced code block or inline code span containing `<div>` or `&amp;` reached Slack as `＜div＞` / `&` even though Slack renders code content literally. Both passes now skip fenced code blocks and inline code spans; ANSI/control-character removal still applies everywhere. For this purpose a code span is recognized within a single line only and closes only on a backtick run of equal length (CommonMark pairing), so a stray unpaired backtick stays literal and cannot suppress sanitization of later lines, and an invalid angle token that spans a code span (`<foo `bar` baz>`) is still neutralized as a whole while the span content stays verbatim.
+- Stopped crafted input from colliding with internal placeholders. Input carrying this library's reserved in-band marker code points (`U+2063`, `U+FFF0`–`U+FFF3`, e.g. a literal `￰code0￱` sequence) could crash conversion with `KeyError` or get substituted with another code span's content. The markers are now stripped during sanitization and at direct-call entry points of the placeholder machinery, and placeholder restoration passes unknown sequences through instead of raising.
+- Consolidated the three duplicated fenced-code tracking loops onto a single `_iter_fence_states` helper so fence semantics cannot drift between passes again — that drift is exactly how the sanitize corruption happened.
+
 ## [2.4.4] - 2026-06-10
 
 ### Fixed

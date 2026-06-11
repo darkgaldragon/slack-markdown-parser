@@ -87,6 +87,7 @@ What this library compensates for:
 - Keeps table-like rows inside fenced code blocks out of table normalization
 - Optionally turns internal blank lines into placeholder lines that keep paragraphs visibly separated in Slack `markdown` blocks
 - Neutralizes invalid Slack angle-bracket tokens such as raw HTML-like tags in prose, while code regions keep their content verbatim
+- Splits oversized output across Slack's measured per-block character limit and per-message expansion-item and total-text limits, instead of letting `chat.postMessage` fail outright
 
 ## Requirements
 
@@ -122,7 +123,7 @@ for payload in convert_markdown_to_slack_payloads(
     print(payload)
 ```
 
-`convert_markdown_to_slack_messages` automatically splits output into multiple messages when the input contains multiple tables.
+`convert_markdown_to_slack_messages` automatically splits output into multiple messages when the input contains multiple tables, and also when long or heading-dense content would exceed Slack's per-block and per-message size limits.
 Set `preserve_visual_blank_lines=True` when you want the parser to compensate
 for Slack's currently tight paragraph spacing inside `markdown` blocks.
 The blank-line workaround is intentionally narrow: it skips table segments and
@@ -176,7 +177,7 @@ Example Slack bot rendering (`markdown` + `table` blocks):
 
 | Function | Description |
 |---|---|
-| `convert_markdown_to_slack_messages(markdown_text, *, preserve_visual_blank_lines=False) -> list[list[dict]]` | Convert Markdown into Slack messages already split around table blocks. |
+| `convert_markdown_to_slack_messages(markdown_text, *, preserve_visual_blank_lines=False) -> list[list[dict]]` | Convert Markdown into Slack messages already split around table blocks and Slack's measured size limits. |
 | `convert_markdown_to_slack_payloads(markdown_text, *, preserve_visual_blank_lines=False) -> list[dict]` | Convert Markdown into Slack-ready request data with both `blocks` and preview `text`. |
 | `convert_markdown_to_slack_blocks(markdown_text, *, preserve_visual_blank_lines=False) -> list[dict]` | Convert Markdown into a flat Block Kit block list. |
 | `build_fallback_text_from_blocks(blocks) -> str` | Build preview text suitable for `chat.postMessage.text`. |
@@ -196,6 +197,7 @@ Slack Markdown rendering or keep list formatting open in some clients.
 | Function | Description |
 |---|---|
 | `normalize_markdown_tables(markdown_text) -> str` | Normalize Markdown table syntax before conversion. |
+| `normalize_underscore_emphasis(text) -> str` | Convert `_..._` / `__...__` underscore emphasis into Slack-friendly asterisk emphasis. |
 | `add_zero_width_spaces_to_markdown(text) -> str` | Insert zero-width spaces around formatting tokens where Slack needs stronger boundaries. |
 | `decode_html_entities(text) -> str` | Decode HTML entities in prose before parsing; fenced code and inline code stay verbatim. |
 | `sanitize_slack_text(text) -> str` | Remove ANSI/control noise and reserved marker code points, and neutralize invalid Slack angle-bracket tokens outside code regions. |
