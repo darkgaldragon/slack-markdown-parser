@@ -23,8 +23,8 @@ When exact Markdown fidelity conflicts with Slack readability, readable Slack ou
 
 `convert_markdown_to_slack_blocks` processes text in this order:
 
-1. Decode HTML entities such as `&gt;` and `&amp;`
-2. Clean Slack text by removing ANSI/control noise and neutralizing invalid Slack angle-bracket tokens
+1. Decode HTML entities such as `&gt;` and `&amp;` in prose, leaving fenced code blocks and inline code spans verbatim
+2. Clean Slack text: remove ANSI/control noise and this library's reserved internal marker code points everywhere, and neutralize invalid Slack angle-bracket tokens outside fenced code blocks and inline code spans
 3. Normalize underscore emphasis by converting `_..._` / `__...__` into Slack-friendly `*...*` / `**...**`
 4. Normalize bare URLs by wrapping them in Slack-friendly `<https://...>` form
 5. Repair malformed tables using the rules below
@@ -84,7 +84,7 @@ Slack still controls when those newer features appear and how they look, so trea
     - Slack mention tokens inside a promoted list item are converted to their structured `rich_text` elements — `<@U…>`/`<@W…>` to `user`, `<#C…>`/`<#G…>` to `channel`, `<!subteam^S…>` to `usergroup`, and `<!here>`/`<!channel>`/`<!everyone>` to `broadcast` — since a `rich_text` block does not resolve a raw token. An optional `|label` display suffix is dropped (Slack renders the element from the id).
 - Table-like rows inside fenced code blocks are kept out of table parsing
 - Internal blank lines can optionally be rewritten into placeholder lines so Slack keeps visible paragraph separation
-- Unsupported Slack angle-bracket tokens such as `<foo>` or raw HTML-like tags are neutralized
+- Unsupported Slack angle-bracket tokens such as `<foo>` or raw HTML-like tags are neutralized in prose, while fenced code blocks and inline code spans keep them verbatim
 
 ## Slack text cleanup rules
 
@@ -92,9 +92,11 @@ Behavior of `sanitize_slack_text`:
 
 - Remove ANSI escape sequences
 - Remove general control characters except line breaks and tabs already preserved by the regex
+- Remove this library's reserved internal marker code points (`U+2063`, `U+FFF0`–`U+FFF3`) so input cannot collide with the internal placeholder machinery
 - Keep valid Slack angle-bracket tokens such as links, mentions, channels, special mentions, subteam mentions, and `<!date^...>`
 - Replace unsupported angle-bracket tokens such as `<foo>` with full-width brackets (`＜foo＞`) so Slack does not interpret them as malformed special syntax
 - This also applies to raw HTML-like tags such as `<div>` or `<span>`
+- Angle-token neutralization applies only outside fenced code blocks and inline code spans, so code samples such as `` `<div>` `` reach Slack verbatim; ANSI/control/marker removal applies everywhere because those characters are never legitimate content
 
 ## Underscore emphasis normalization rules
 

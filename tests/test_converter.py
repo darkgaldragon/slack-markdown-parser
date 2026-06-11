@@ -957,6 +957,92 @@ def test_sanitize_removes_ansi_and_control_chars() -> None:
     assert sanitize_slack_text(raw) == "ok red done"
 
 
+def test_sanitize_removes_internal_marker_code_points() -> None:
+    raw = "a\u2063b\ufff0c\ufff1d\ufff2e\ufff3f"
+    assert sanitize_slack_text(raw) == "abcdef"
+
+
+def test_fenced_code_preserves_html_tags_and_entities() -> None:
+    raw = 'Before\n\n```html\n<div class="x">a &amp; b</div>\n```\n'
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    preformatted = blocks[1]["elements"][0]
+    assert preformatted["type"] == "rich_text_preformatted"
+    assert preformatted["elements"][0]["text"] == '<div class="x">a &amp; b</div>'
+
+
+def test_unclosed_fence_preserves_html_tags_and_entities() -> None:
+    blocks = convert_markdown_to_slack_blocks("```\n<div> &amp;\n")
+
+    assert blocks[0]["type"] == "markdown"
+    assert "<div> &amp;" in blocks[0]["text"]
+
+
+def test_inline_code_preserves_html_tags_and_entities() -> None:
+    blocks = convert_markdown_to_slack_blocks(
+        "A &gt; B with `<div>` and `&amp;` and <foo> tag."
+    )
+
+    assert blocks[0]["text"] == "A > B with `<div>` and `&amp;` and ＜foo＞ tag."
+
+
+def test_stray_backticks_across_lines_do_not_suppress_sanitization() -> None:
+    raw = "tick ` here\nProse &gt; and <foo> stay sanitized\nanother ` tick"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert "Prose > and ＜foo＞ stay sanitized" in blocks[0]["text"]
+
+
+def test_same_line_inline_code_still_protected_with_stray_backtick_nearby() -> None:
+    raw = "stray ` tick\nuse `<div>` here"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert "`<div>`" in blocks[0]["text"]
+
+
+def test_lone_backtick_does_not_pair_with_longer_backtick_run() -> None:
+    raw = "` not code <foo> ``<code>``"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert "＜foo＞" in blocks[0]["text"]
+    assert "``<code>``" in blocks[0]["text"]
+
+
+def test_invalid_angle_token_spanning_inline_code_is_neutralized() -> None:
+    blocks = convert_markdown_to_slack_blocks("A <foo `bar` baz> B")
+
+    assert blocks[0]["text"] == "A ＜foo `bar` baz＞ B"
+
+
+def test_placeholder_injection_does_not_crash_or_steal_spans() -> None:
+    blocks = convert_markdown_to_slack_blocks("attack \ufff0code0\ufff1 here")
+    assert blocks[0]["text"] == "attack code0 here"
+
+    blocks = convert_markdown_to_slack_blocks(
+        "attack \ufff0code0\ufff1 with `real` code"
+    )
+    assert blocks[0]["text"] == "attack code0 with `real` code"
+
+
+def test_direct_zwsp_api_survives_placeholder_injection() -> None:
+    formatted = add_zero_width_spaces_to_markdown("x \ufff0code0\ufff1 y `code`")
+
+    assert "\ufff0" not in formatted
+    assert "\ufff1" not in formatted
+    assert "`code`" in formatted
+
+
+def test_direct_underscore_api_survives_placeholder_injection() -> None:
+    assert (
+        normalize_underscore_emphasis("x \ufff00\ufff1 `code` _em_")
+        == "x 0 `code` *em*"
+    )
+
+
 def test_convert_blocks_applies_slack_sanitization() -> None:
     blocks = convert_markdown_to_slack_blocks("Status <draft>\x1b[31m")
     assert blocks[0]["text"] == "Status ＜draft＞"

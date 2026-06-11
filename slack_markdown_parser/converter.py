@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import html
 import re
+from collections.abc import Callable, Iterable, Iterator
 from typing import Any
 from urllib.parse import urlparse
 
@@ -22,6 +23,14 @@ ANSI_ESCAPE_PATTERN = re.compile(
     r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x1B\x07]*(?:\x07|\x1B\\))"
 )
 CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]")
+# In-band marker code points reserved by this module's placeholder/spacing
+# machinery: SYNTH_SPACE_MARKER (U+2063), the inline-code placeholder
+# delimiters (U+FFF0/U+FFF1), and the ZWSP-strip markers (U+FFF2/U+FFF3).
+# They have no legitimate use in chat text, and input that carries them would
+# collide with internal placeholders (a stray ``\ufff0code0\ufff1`` either
+# crashes restoration with KeyError or gets substituted with another span's
+# content), so they are removed up front together with control characters.
+INTERNAL_MARKER_CHAR_PATTERN = re.compile("[\u2063\ufff0-\ufff3]")
 SLACK_ANGLE_TOKEN_PATTERN = re.compile(r"<[^>\n]+>")
 BARE_URL_PATTERN = re.compile(r"https?://[^\s<]+", re.IGNORECASE)
 FENCE_OPEN_PATTERN = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})([^\n]*)$")
@@ -110,10 +119,15 @@ SLACK_MAX_BLOCKS_PER_MESSAGE = 50
 
 
 def decode_html_entities(text: str) -> str:
-    """Decode HTML entities that may appear in model output."""
-    if not text:
+    """Decode HTML entities in prose while leaving code regions verbatim.
+
+    Prose entities such as ``&gt;`` are decoded for natural reading, but a
+    fenced code block or inline code span showing ``&amp;`` keeps the literal
+    entity: code samples are content, not markup to repair.
+    """
+    if not text or "&" not in text:
         return text
-    return html.unescape(text)
+    return _transform_outside_code_regions(text, html.unescape)
 
 
 def strip_zero_width_spaces(text: str) -> str:
@@ -566,15 +580,90 @@ def _is_allowed_slack_angle_token(token: str) -> bool:
 
 
 def _find_inline_code_span_end(text: str, start: int) -> int | None:
+    """Find the end of the inline code span opened at ``start``.
+
+    Per CommonMark, a code span closes only with a backtick run of *equal*
+    length: a lone `` ` `` must not pair with the first backtick of a later
+    ``` `` ``` run. Runs of a different length are skipped whole.
+    """
     delimiter_end = start
     while delimiter_end < len(text) and text[delimiter_end] == "`":
         delimiter_end += 1
+    delimiter_length = delimiter_end - start
 
-    delimiter = text[start:delimiter_end]
-    closing = text.find(delimiter, delimiter_end)
-    if closing == -1:
-        return None
-    return closing + len(delimiter)
+    cursor = delimiter_end
+    while True:
+        closing = text.find("`", cursor)
+        if closing == -1:
+            return None
+        run_end = closing
+        while run_end < len(text) and text[run_end] == "`":
+            run_end += 1
+        if run_end - closing == delimiter_length:
+            return run_end
+        cursor = run_end
+
+
+def _transform_outside_inline_code(text: str, transform: Callable[[str], str]) -> str:
+    """Apply ``transform`` to text while keeping inline code spans verbatim.
+
+    Spans are bounded to a single line, matching this module's span model
+    (``INLINE_CODE_SPAN_PATTERN``). Without that bound, one stray backtick
+    would pair with a backtick on a much later line and silently suppress
+    sanitization for everything in between.
+
+    Spans are replaced with placeholder tokens (which contain no backticks or
+    angle brackets) rather than split out, so the transform still sees any
+    construct that *spans* a code span — e.g. an invalid angle token such as
+    ``<foo `bar` baz>`` is neutralized as a whole while the span content
+    itself stays verbatim. Reserved marker code points are stripped from the
+    input first, so crafted input cannot collide with the placeholders.
+    """
+    text = INTERNAL_MARKER_CHAR_PATTERN.sub("", text)
+
+    spans: list[str] = []
+    parts: list[str] = []
+    plain_start = 0
+    cursor = text.find("`")
+
+    while cursor != -1:
+        span_end = _find_inline_code_span_end(text, cursor)
+        if span_end is None or "\n" in text[cursor:span_end]:
+            # No same-line closing run: the backticks are literal text.
+            delimiter_end = cursor
+            while delimiter_end < len(text) and text[delimiter_end] == "`":
+                delimiter_end += 1
+            cursor = text.find("`", delimiter_end)
+            continue
+        parts.append(text[plain_start:cursor])
+        parts.append(f"\ufff0code{len(spans)}\ufff1")
+        spans.append(text[cursor:span_end])
+        plain_start = span_end
+        cursor = text.find("`", span_end)
+
+    parts.append(text[plain_start:])
+    transformed = transform("".join(parts))
+
+    if not spans:
+        return transformed
+    placeholder_map = {f"\ufff0code{idx}\ufff1": span for idx, span in enumerate(spans)}
+    return INLINE_CODE_PLACEHOLDER_PATTERN.sub(
+        lambda match: placeholder_map.get(match.group(0), match.group(0)),
+        transformed,
+    )
+
+
+def _transform_outside_code_regions(text: str, transform: Callable[[str], str]) -> str:
+    """Apply ``transform`` outside fenced code blocks and inline code spans.
+
+    Code samples must reach Slack verbatim: neither Slack's ``markdown`` block
+    renderer nor ``rich_text_preformatted`` interprets their content, so any
+    rewrite inside a code region is visible corruption.
+    """
+    return "".join(
+        chunk if is_fenced else _transform_outside_inline_code(chunk, transform)
+        for is_fenced, chunk in _split_fenced_code_chunks(text)
+    )
 
 
 def _is_punctuation_like(char: str, boundary_chars: set[str]) -> bool:
@@ -690,12 +779,21 @@ def normalize_bare_urls_for_slack_markdown(text: str) -> str:
 
 
 def sanitize_slack_text(text: str) -> str:
-    """Remove control noise and neutralize invalid Slack angle tokens."""
+    """Remove control noise and neutralize invalid Slack angle tokens.
+
+    ANSI escapes, control characters, and this module's reserved in-band
+    marker code points are removed everywhere — including code regions —
+    because they are never legitimate visible content. Angle-token
+    neutralization rewrites visible text, so it skips fenced code blocks and
+    inline code spans: a code sample containing ``<div>`` must reach Slack
+    verbatim.
+    """
     if not text:
         return text
 
     cleaned = ANSI_ESCAPE_PATTERN.sub("", text)
     cleaned = CONTROL_CHAR_PATTERN.sub("", cleaned)
+    cleaned = INTERNAL_MARKER_CHAR_PATTERN.sub("", cleaned)
 
     def replace_invalid_token(match: re.Match[str]) -> str:
         token = match.group(0)
@@ -703,7 +801,10 @@ def sanitize_slack_text(text: str) -> str:
             return token
         return f"＜{token[1:-1]}＞"
 
-    return SLACK_ANGLE_TOKEN_PATTERN.sub(replace_invalid_token, cleaned)
+    def neutralize_angle_tokens(segment: str) -> str:
+        return SLACK_ANGLE_TOKEN_PATTERN.sub(replace_invalid_token, segment)
+
+    return _transform_outside_code_regions(cleaned, neutralize_angle_tokens)
 
 
 def _match_fence_open(line: str) -> tuple[str, int] | None:
@@ -723,38 +824,58 @@ def _is_fence_close(line: str, fence: tuple[str, int]) -> bool:
     )
 
 
+def _iter_fence_states(lines: Iterable[str]) -> Iterator[tuple[str, bool, bool]]:
+    """Yield ``(line, is_fenced, is_opening)`` for each line.
+
+    Single source of truth for fenced-code tracking across this module.
+    ``is_fenced`` covers the fence delimiter lines themselves and the body of
+    an unclosed trailing fence; ``is_opening`` marks the opening delimiter
+    line so callers can flush per-fence state. Works with or without trailing
+    newlines on the lines.
+    """
+    active_fence: tuple[str, int] | None = None
+    for line in lines:
+        if active_fence is None:
+            opening_fence = _match_fence_open(line)
+            if opening_fence is not None:
+                active_fence = opening_fence
+                yield line, True, True
+                continue
+            yield line, False, False
+            continue
+        yield line, True, False
+        if _is_fence_close(line, active_fence):
+            active_fence = None
+
+
 def _split_fenced_code_chunks(text: str) -> list[tuple[bool, str]]:
     chunks: list[tuple[bool, str]] = []
     if not text:
         return chunks
 
     current: list[str] = []
-    active_fence: tuple[str, int] | None = None
+    current_is_fenced = False
 
-    for line in text.splitlines(keepends=True):
-        opening_fence = _match_fence_open(line) if active_fence is None else None
-
-        if opening_fence:
-            if current:
-                chunks.append((False, "".join(current)))
-                current = []
-            current.append(line)
-            active_fence = opening_fence
-            continue
-
-        current.append(line)
-        if active_fence and _is_fence_close(line, active_fence):
-            chunks.append((True, "".join(current)))
+    for line, is_fenced, is_opening in _iter_fence_states(
+        text.splitlines(keepends=True)
+    ):
+        if current and (is_opening or is_fenced != current_is_fenced):
+            chunks.append((current_is_fenced, "".join(current)))
             current = []
-            active_fence = None
+        current.append(line)
+        current_is_fenced = is_fenced
 
     if current:
-        chunks.append((active_fence is not None, "".join(current)))
+        chunks.append((current_is_fenced, "".join(current)))
 
     return chunks
 
 
 def _normalize_underscore_emphasis_chunk(text: str) -> str:
+    # Same defense as _format_markdown_with_spacing_metadata: reserved marker
+    # code points in direct-call input must not collide with the numbered
+    # placeholders below.
+    text = INTERNAL_MARKER_CHAR_PATTERN.sub("", text)
     protected_spans: list[str] = []
 
     def protect(match: re.Match[str]) -> str:
@@ -797,6 +918,11 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, list[int]]:
     """Return formatted markdown text plus synthetic visible-space positions."""
     if not text:
         return text, []
+
+    # Defense in depth for direct calls that bypass sanitize_slack_text: input
+    # carrying our reserved marker code points would collide with the inline
+    # placeholder machinery below.
+    text = INTERNAL_MARKER_CHAR_PATTERN.sub("", text)
 
     boundary_chars = {*VISIBLE_BOUNDARY_CHARS, ZWSP, SYNTH_SPACE_MARKER}
 
@@ -871,9 +997,16 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, list[int]]:
         before_char = source[start - 1] if start > 0 else ""
         after_char = source[end] if end < len(source) else ""
         strategy = _nested_code_space_strategy(source, start, end, boundary_chars)
+
+        def resolve_placeholder_raw(placeholder_match: re.Match[str]) -> str:
+            # Unknown placeholder-shaped sequences pass through unchanged
+            # (belt-and-braces against in-band collisions; the markers are
+            # already stripped at every entry point).
+            entry = replacements.get(placeholder_match.group(0))
+            return entry["raw"] if entry else placeholder_match.group(0)
+
         resolved_text = INLINE_CODE_PLACEHOLDER_PATTERN.sub(
-            lambda placeholder_match: replacements[placeholder_match.group(0)]["raw"],
-            match.group(0),
+            resolve_placeholder_raw, match.group(0)
         )
         has_ascii_word = bool(re.search(r"[A-Za-z0-9]", resolved_text))
         adjusted_text = match.group(0)
@@ -981,11 +1114,12 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, list[int]]:
                 protected_segment,
             )
 
+        def restore_placeholder(placeholder_match: re.Match[str]) -> str:
+            entry = placeholder_map.get(placeholder_match.group(0))
+            return entry["wrapped"] if entry else placeholder_match.group(0)
+
         protected_segment = INLINE_CODE_PLACEHOLDER_PATTERN.sub(
-            lambda placeholder_match: placeholder_map[placeholder_match.group(0)][
-                "wrapped"
-            ],
-            protected_segment,
+            restore_placeholder, protected_segment
         )
 
         protected_segment = re.sub(
@@ -1275,20 +1409,11 @@ def normalize_markdown_tables(markdown_text: str) -> str:
             normalized.extend(buffer)
         buffer = []
 
-    active_fence: tuple[str, int] | None = None
-
-    for idx, line in enumerate(lines):
-        opening_fence = _match_fence_open(line) if active_fence is None else None
-        if opening_fence:
-            flush_buffer()
+    for idx, (line, is_fenced, is_opening) in enumerate(_iter_fence_states(lines)):
+        if is_fenced:
+            if is_opening:
+                flush_buffer()
             normalized.append(line)
-            active_fence = opening_fence
-            continue
-
-        if active_fence:
-            normalized.append(line)
-            if _is_fence_close(line, active_fence):
-                active_fence = None
             continue
 
         stripped = line.strip()
@@ -1956,16 +2081,10 @@ def split_markdown_into_segments(markdown_text: str) -> list[dict[str, str]]:
         current = []
         current_is_table = None
 
-    active_fence: tuple[str, int] | None = None
-
-    for line in lines:
+    for line, is_fenced, _ in _iter_fence_states(lines):
         stripped = line.strip()
-        opening_fence = _match_fence_open(line) if active_fence is None else None
-        is_fenced_line = active_fence is not None or opening_fence is not None
         is_table_line = (
-            False
-            if is_fenced_line
-            else stripped.startswith("|") and stripped.endswith("|")
+            False if is_fenced else stripped.startswith("|") and stripped.endswith("|")
         )
 
         if current_is_table is None:
@@ -1977,11 +2096,6 @@ def split_markdown_into_segments(markdown_text: str) -> list[dict[str, str]]:
             flush()
             current_is_table = is_table_line
             current.append(line)
-
-        if opening_fence:
-            active_fence = opening_fence
-        elif active_fence and _is_fence_close(line, active_fence):
-            active_fence = None
 
     flush()
     return segments
