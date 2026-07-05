@@ -289,6 +289,66 @@ def test_glued_heading_with_mismatched_first_cell_words_stays_markdown() -> None
     assert "### Report Status | Owner" in blocks[0]["text"]
 
 
+def test_atx_looking_row_inside_active_table_is_kept() -> None:
+    # Codex review on #66 (round 3): the heading escape applies only when a
+    # heading would *start* a candidate run; inside an active table buffer a
+    # '#'-leading line is a data row and must stay in the table.
+    raw = "Name | Status\n--- | ---\n# Important | Done"
+
+    table = _first_table(convert_markdown_to_slack_blocks(raw))
+
+    assert [extract_plain_text_from_table_cell(cell) for cell in table["rows"][1]] == [
+        "# Important",
+        "Done",
+    ]
+
+
+def test_demoted_fence_split_attaches_closing_delimiter() -> None:
+    # Codex review on #66 (round 3): the closing delimiter must never form a
+    # delimiter-only piece; it rides along even slightly over the packing
+    # target (well within the hard-limit headroom).
+    raw = "```\n" + "y" * 11493 + "\n" + "z" * 11493 + "\n```"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert all(block["type"] == "markdown" for block in blocks)
+    assert all(len(block["text"]) <= 12000 for block in blocks)
+    assert all(block["text"].strip("`\n") for block in blocks)
+    rebuilt_body = [
+        line
+        for block in blocks
+        for line in block["text"].split("\n")
+        if not line.startswith("```")
+    ]
+    assert rebuilt_body == ["y" * 11493, "z" * 11493]
+
+
+def test_oversized_single_line_quote_keeps_quote_markers() -> None:
+    # Codex review on #66 (round 3): splitting "> " + one huge unbroken line
+    # used to emit a first block containing only ">" and unmarked
+    # continuations; every part now carries the quote marker.
+    raw = "> " + "あ" * 13000
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert all(block["type"] == "markdown" for block in blocks)
+    quote_lines = [line for block in blocks for line in block["text"].split("\n")]
+    assert all(line.startswith("> ") and len(line) > 2 for line in quote_lines)
+    assert "".join(line[2:] for line in quote_lines) == "あ" * 13000
+
+
+def test_oversized_single_line_list_item_keeps_marker_with_content() -> None:
+    raw = "- " + "い" * 13000
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    all_lines = [line for block in blocks for line in block["text"].split("\n")]
+    assert all_lines[0].startswith("- い")
+    # Continuations are unmarked lazy continuations, never a bare marker.
+    assert all(line.strip() not in {"-", ">"} for line in all_lines)
+    assert "".join(line.removeprefix("- ") for line in all_lines) == "い" * 13000
+
+
 def test_underscore_inside_multiline_code_span_is_preserved() -> None:
     # Codex review on #66: the paragraph-bounded span model applies to
     # underscore normalization too — Slack renders the span as code, where a

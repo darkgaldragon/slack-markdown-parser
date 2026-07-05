@@ -1536,10 +1536,12 @@ def normalize_markdown_tables(markdown_text: str) -> str:
             heading_text, table_line = heading_and_table
             normalized.append(heading_text)
             buffer.append(table_line)
-        elif "|" in stripped and not ATX_HEADING_PATTERN.match(line):
-            # A heading line whose glued-header split was rejected is a
-            # heading that merely contains a pipe; buffering it would let the
-            # pipe-completion heuristic swallow it as a table data row.
+        elif "|" in stripped and (buffer or not ATX_HEADING_PATTERN.match(line)):
+            # A heading-looking line whose glued-header split was rejected
+            # only escapes buffering when it would *start* a candidate run: a
+            # heading that merely contains a pipe must not seed the
+            # pipe-completion heuristic. Inside an already-buffered run it is
+            # kept — there it is a data row whose first cell begins with '#'.
             buffer.append(line)
         else:
             flush_buffer()
@@ -1954,17 +1956,32 @@ def _split_text_at_blank_lines(text: str, max_length: int, max_items: int) -> li
     return pieces
 
 
+_QUOTE_MARKER_PREFIX_PATTERN = re.compile(r"^[ \t]{0,3}>[ \t]?")
+
+
 def _split_single_line_to_length(line: str, max_length: int) -> list[str]:
-    """Split one overlong line, preferring a space boundary near the limit."""
+    """Split one overlong line, preferring a space boundary near the limit.
+
+    A leading quote or list marker is never split off on its own (the space
+    search starts after it), and a quote marker is re-applied to continuation
+    parts so consecutive parts keep rendering as one quote. List continuations
+    stay unmarked: as following lines they are lazy item continuations.
+    """
+    quote_match = _QUOTE_MARKER_PREFIX_PATTERN.match(line)
+    marker_match = quote_match or LIST_ITEM_PATTERN.match(line)
+    prefix_end = marker_match.end() if marker_match else 0
+    continuation_prefix = quote_match.group(0) if quote_match else ""
+
     parts: list[str] = []
     while len(line) > max_length:
-        cut = line.rfind(" ", 1, max_length + 1)
-        if cut <= 0:
+        cut = line.rfind(" ", prefix_end + 1, max_length + 1)
+        if cut <= prefix_end:
             parts.append(line[:max_length])
-            line = line[max_length:]
+            line = continuation_prefix + line[max_length:]
         else:
             parts.append(line[:cut])
-            line = line[cut + 1 :]
+            line = continuation_prefix + line[cut + 1 :]
+        prefix_end = len(continuation_prefix)
     parts.append(line)
     return parts
 
@@ -2011,6 +2028,17 @@ def _split_lines_to_length(text: str, max_length: int, max_items: int) -> list[s
         elif not is_fenced:
             active_fence_open = None
 
+        # A fence-close line never starts a new piece: flushing on it would
+        # emit the close (plus reopened fence) as a stray delimiter-only
+        # block. Appending it may exceed the packing target by a few
+        # characters, well within the headroom to the hard limit.
+        line_is_fence_close = False
+        if is_fenced and not is_opening and active_fence_open is not None:
+            open_spec = _match_fence_open(active_fence_open)
+            line_is_fence_close = open_spec is not None and _is_fence_close(
+                line, open_spec
+            )
+
         line_is_blank = not is_fenced and not line.strip()
         line_is_breaker = (
             not is_fenced
@@ -2034,9 +2062,13 @@ def _split_lines_to_length(text: str, max_length: int, max_items: int) -> list[s
                 part_items = 0 if in_run else 1
 
             added = len(part) + (1 if current else 0)
-            if current and (
-                current_len + added > max_length
-                or current_items + part_items > max_items
+            if (
+                current
+                and not line_is_fence_close
+                and (
+                    current_len + added > max_length
+                    or current_items + part_items > max_items
+                )
             ):
                 reopen = active_fence_open if active_fence_open != part else None
                 flush(reopen)

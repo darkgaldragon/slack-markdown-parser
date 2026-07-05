@@ -239,6 +239,10 @@ Long or heading-dense non-table regions are therefore split before delivery:
 - `convert_markdown_to_slack_messages` additionally packs blocks into messages so that the summed expansion estimate stays within the 50-item budget (non-`markdown` blocks count as one item each) and the summed block text stays within the 13,200-character per-message total
 - The top-level fallback `text` field is not subject to the character limit (Slack truncates it instead of rejecting), so preview text is left whole
 
+## Known limitations
+
+- The line-oriented block machinery — rich-block promotion, table segmentation, and intra-paragraph splitting — is not aware of inline code spans that cross soft line breaks. A block-syntax line (image, table row, fence) sitting inside such a span can still be promoted to a real block, and a split of an over-budget paragraph can cut such a span apart, leaving unmatched backticks. The content-rewriting stages (decode, sanitize, URL, underscore, zero-width spaces) do respect these spans. Multi-line single-backtick spans wrapping block-like content are rare in practice — multi-line code is normally fenced — and span-aware line consumption is planned as follow-up work.
+
 ## Optional blank-line visibility workaround
 
 When `preserve_visual_blank_lines=True` is passed to the main conversion APIs,
