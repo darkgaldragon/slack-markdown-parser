@@ -823,6 +823,16 @@ def normalize_bare_urls_for_slack_markdown(text: str) -> str:
                     parts.append(chunk[cursor:code_span_end])
                     cursor = code_span_end
                     continue
+                # No same-paragraph span: skip the whole backtick run, as
+                # _iter_inline_code_spans does. Restarting inside the run
+                # would open a fake shorter-delimiter span and swallow a
+                # later real span together with its content.
+                run_end = cursor
+                while run_end < len(chunk) and chunk[run_end] == "`":
+                    run_end += 1
+                parts.append(chunk[cursor:run_end])
+                cursor = run_end
+                continue
 
             url_match = BARE_URL_PATTERN.match(chunk, cursor)
             if url_match:
@@ -1536,12 +1546,21 @@ def normalize_markdown_tables(markdown_text: str) -> str:
             heading_text, table_line = heading_and_table
             normalized.append(heading_text)
             buffer.append(table_line)
-        elif "|" in stripped and (buffer or not ATX_HEADING_PATTERN.match(line)):
+        elif "|" in stripped and (
+            buffer
+            or not ATX_HEADING_PATTERN.match(line)
+            or bool(
+                next_line is not None
+                and LOOSE_TABLE_SEPARATOR_PATTERN.match(next_line.strip())
+            )
+        ):
             # A heading-looking line whose glued-header split was rejected
             # only escapes buffering when it would *start* a candidate run: a
             # heading that merely contains a pipe must not seed the
             # pipe-completion heuristic. Inside an already-buffered run it is
-            # kept — there it is a data row whose first cell begins with '#'.
+            # kept — there it is a data row whose first cell begins with '#'
+            # — and a following separator row proves a table context, so a
+            # header row whose first cell begins with '#' seeds the run too.
             buffer.append(line)
         else:
             flush_buffer()
@@ -1959,8 +1978,20 @@ def _split_text_at_blank_lines(text: str, max_length: int, max_items: int) -> li
 _QUOTE_MARKER_PREFIX_PATTERN = re.compile(r"^[ \t]{0,3}>[ \t]?")
 
 
+def _split_line_verbatim_to_length(line: str, max_length: int) -> list[str]:
+    """Hard-cut one overlong line into parts, preserving every character.
+
+    For fenced code lines only: the prose splitter prefers a space boundary
+    and drops that space — silently altering code — and its quote/list
+    marker handling must not apply to a code line that merely starts with
+    ``> `` or ``- ``.
+    """
+    return [line[i : i + max_length] for i in range(0, len(line), max_length)]
+
+
 def _split_single_line_to_length(line: str, max_length: int) -> list[str]:
-    """Split one overlong line, preferring a space boundary near the limit.
+    """Split one overlong prose line, preferring a space boundary near the
+    limit.
 
     A leading quote or list marker is never split off on its own (the space
     search starts after it), and a quote marker is re-applied to continuation
@@ -2049,7 +2080,11 @@ def _split_lines_to_length(text: str, max_length: int, max_items: int) -> list[s
         for part_index, part in enumerate(
             [line]
             if len(line) <= max_length
-            else _split_single_line_to_length(line, max_length)
+            else (
+                _split_line_verbatim_to_length(line, max_length)
+                if is_fenced
+                else _split_single_line_to_length(line, max_length)
+            )
         ):
             # Word-split continuations of a breaker line render as plain
             # content, so only the first part keeps the breaker class.

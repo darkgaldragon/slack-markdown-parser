@@ -349,6 +349,51 @@ def test_oversized_single_line_list_item_keeps_marker_with_content() -> None:
     assert "".join(line.removeprefix("- ") for line in all_lines) == "い" * 13000
 
 
+def test_split_fenced_line_starting_with_quote_marker_stays_verbatim() -> None:
+    # Codex review on #66 (round 4): marker awareness applies to prose only —
+    # a fenced code line starting with "> " is code, and continuations must
+    # not gain a synthetic quote marker.
+    raw = "```\n> " + "c" * 13000 + "\n```"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) > 1
+    rebuilt_body = "".join(
+        line
+        for block in blocks
+        for line in block["text"].split("\n")
+        if not line.startswith("```")
+    )
+    assert rebuilt_body == "> " + "c" * 13000
+
+
+def test_atx_looking_header_row_before_separator_seeds_table() -> None:
+    # Codex review on #66 (round 4): an explicit separator on the next line
+    # proves a table context, so a header row whose first cell begins with
+    # '#' seeds the buffer instead of escaping as a heading.
+    raw = "# Important | Count\n--- | ---\nfoo | 1"
+
+    table = _first_table(convert_markdown_to_slack_blocks(raw))
+
+    headers = [extract_plain_text_from_table_cell(cell) for cell in table["rows"][0]]
+    assert headers == ["# Important", "Count"]
+    assert [extract_plain_text_from_table_cell(cell) for cell in table["rows"][1]] == [
+        "foo",
+        "1",
+    ]
+
+
+def test_unmatched_backtick_run_does_not_break_later_span_url() -> None:
+    # Codex review on #66 (round 4): a backtick run that opens no span is
+    # skipped whole (matching the span model); restarting inside it used to
+    # open a fake span and wrap the URL inside the later real code span.
+    converted = normalize_bare_urls_for_slack_markdown(
+        "`` stray opener\n`https://example.com` を参照"
+    )
+
+    assert "<https://example.com>" not in converted
+
+
 def test_underscore_inside_multiline_code_span_is_preserved() -> None:
     # Codex review on #66: the paragraph-bounded span model applies to
     # underscore normalization too — Slack renders the span as code, where a
