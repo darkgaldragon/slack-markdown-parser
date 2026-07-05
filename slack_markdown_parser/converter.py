@@ -72,6 +72,9 @@ EMPHASIS_PATTERNS = (
     re.compile(r"~~(?!\s)((?:(?!~~|\n[ \t]*\n).)+?)(?<!\s)~~", flags=re.DOTALL),
 )
 INLINE_CODE_PLACEHOLDER_PATTERN = re.compile(r"\ufff0code\d+\ufff1")
+# A blank line ends the paragraph, and with it any possible code span: Slack
+# pairs backticks across soft line breaks but never across paragraphs.
+_CODE_SPAN_BLANK_LINE_PATTERN = re.compile(r"\n[ \t]*\n")
 PROTECTED_UNDERSCORE_SPAN_PATTERN = re.compile(
     r"`[^`\n]+`"
     r"|\[[^\]\n]+\]\([^\)\n]+\)"
@@ -647,10 +650,13 @@ def _find_inline_code_span_end(text: str, start: int) -> int | None:
 def _transform_outside_inline_code(text: str, transform: Callable[[str], str]) -> str:
     """Apply ``transform`` to text while keeping inline code spans verbatim.
 
-    Spans are bounded to a single line, matching this module's span model
-    (``INLINE_CODE_SPAN_PATTERN``). Without that bound, one stray backtick
-    would pair with a backtick on a much later line and silently suppress
-    sanitization for everything in between.
+    Spans are bounded to a single paragraph: Slack pairs backticks across
+    soft line breaks (CommonMark treats line endings inside a code span as
+    spaces; verified against a real workspace, 2026-07-05), so such a span
+    must be respected — rewriting its content would visibly corrupt what
+    Slack renders as code. Backticks in different paragraphs never pair, so
+    the blank-line bound still keeps one stray backtick from suppressing
+    sanitization for the rest of the message.
 
     Spans are replaced with placeholder tokens (which contain no backticks or
     angle brackets) rather than split out, so the transform still sees any
@@ -668,8 +674,10 @@ def _transform_outside_inline_code(text: str, transform: Callable[[str], str]) -
 
     while cursor != -1:
         span_end = _find_inline_code_span_end(text, cursor)
-        if span_end is None or "\n" in text[cursor:span_end]:
-            # No same-line closing run: the backticks are literal text.
+        if span_end is None or _CODE_SPAN_BLANK_LINE_PATTERN.search(
+            text[cursor:span_end]
+        ):
+            # No same-paragraph closing run: the backticks are literal text.
             delimiter_end = cursor
             while delimiter_end < len(text) and text[delimiter_end] == "`":
                 delimiter_end += 1
@@ -790,13 +798,16 @@ def normalize_bare_urls_for_slack_markdown(text: str) -> str:
 
             if char == "`":
                 code_span_end = _find_inline_code_span_end(chunk, cursor)
-                # Same single-line span model as _transform_outside_inline_code:
-                # without the newline bound, one stray backtick would pair with
-                # a backtick on a later line and leave every bare URL between
-                # them unwrapped.
+                # Same paragraph-bounded span model as
+                # _transform_outside_inline_code: Slack pairs backticks across
+                # soft line breaks, so a URL inside such a span must stay bare
+                # — wrapping it would show a literal ``<…>`` inside the
+                # rendered code span.
                 if (
                     code_span_end is not None
-                    and "\n" not in chunk[cursor:code_span_end]
+                    and not _CODE_SPAN_BLANK_LINE_PATTERN.search(
+                        chunk[cursor:code_span_end]
+                    )
                 ):
                     parts.append(chunk[cursor:code_span_end])
                     cursor = code_span_end

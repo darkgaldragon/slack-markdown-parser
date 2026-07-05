@@ -1321,20 +1321,38 @@ def test_inline_code_preserves_html_tags_and_entities() -> None:
     assert blocks[0]["text"] == "A > B with `<div>` and `&amp;` and ＜foo＞ tag."
 
 
-def test_stray_backticks_across_lines_do_not_suppress_sanitization() -> None:
-    raw = "tick ` here\nProse &gt; and <foo> stay sanitized\nanother ` tick"
+def test_backticks_across_soft_breaks_protect_span_from_sanitization() -> None:
+    # Slack pairs backticks across soft line breaks and renders the stretch
+    # as inline code (verified in a real workspace, 2026-07-05), so the
+    # sanitizer must leave that span verbatim — rewriting it would visibly
+    # corrupt the rendered code.
+    raw = "tick ` here\nProse &gt; and <foo> stay verbatim\nanother ` tick"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert "Prose &gt; and <foo> stay verbatim" in blocks[0]["text"]
+
+
+def test_stray_backticks_across_paragraphs_do_not_suppress_sanitization() -> None:
+    # A code span never crosses a blank line, so one stray backtick cannot
+    # suppress sanitization beyond its own paragraph.
+    raw = "tick ` here\n\nProse &gt; and <foo> stay sanitized\n\nanother ` tick"
 
     blocks = convert_markdown_to_slack_blocks(raw)
 
     assert "Prose > and ＜foo＞ stay sanitized" in blocks[0]["text"]
 
 
-def test_same_line_inline_code_still_protected_with_stray_backtick_nearby() -> None:
+def test_stray_backtick_pairs_forward_matching_slack_rendering() -> None:
+    # CommonMark (and Slack) pair the first backtick with the next same-length
+    # run: the stray opener captures " tick\nuse " as the code span, so the
+    # <div> after it sits outside any span and is neutralized.
     raw = "stray ` tick\nuse `<div>` here"
 
     blocks = convert_markdown_to_slack_blocks(raw)
 
-    assert "`<div>`" in blocks[0]["text"]
+    assert "` tick\nuse `" in blocks[0]["text"]
+    assert "＜div＞" in blocks[0]["text"]
 
 
 def test_lone_backtick_does_not_pair_with_longer_backtick_run() -> None:
@@ -1435,15 +1453,37 @@ def test_normalize_bare_urls_preserves_markdown_links_and_code_spans() -> None:
     assert "`https://example.com/code`" in converted
 
 
-def test_stray_backticks_on_different_lines_do_not_block_url_autolink() -> None:
-    # A code span is bounded to a single line (the module's span model): one
-    # stray backtick must not pair with a backtick on a later line and leave
-    # the bare URL between them unwrapped.
+def test_code_span_across_soft_break_keeps_url_unwrapped() -> None:
+    # Slack pairs backticks across a soft line break within one paragraph and
+    # renders the stretch as inline code (verified in a real workspace,
+    # 2026-07-05); wrapping the URL would show a literal <…> inside that code
+    # span. The span is respected and the URL left bare.
     converted = normalize_bare_urls_for_slack_markdown(
         "これは ` 迷子の記号です\nhttps://example.com を見てください\nそして ` もう一つ"
     )
 
+    assert "<https://example.com>" not in converted
+
+
+def test_stray_backticks_in_different_paragraphs_do_not_block_url_autolink() -> None:
+    # A code span never crosses a blank line, so backticks in different
+    # paragraphs stay literal and the URL between them is autolinked.
+    converted = normalize_bare_urls_for_slack_markdown(
+        "これは ` 迷子です\n\nhttps://example.com を見てください\n\nそして ` もう一つ"
+    )
+
     assert "<https://example.com>" in converted
+
+
+def test_sanitize_keeps_angle_token_in_code_span_across_soft_break() -> None:
+    # The same paragraph-bounded span model applies to sanitization: an
+    # invalid angle token inside a soft-break-crossing code span reaches
+    # Slack verbatim because Slack renders that stretch as code.
+    text = "設定は ` <div>\nfoo ` を参照"
+    assert sanitize_slack_text(text) == text
+
+    across_paragraphs = "これは ` 迷子です\n\n<div> タグ\n\nそして ` もう一つ"
+    assert "＜div＞" in sanitize_slack_text(across_paragraphs)
 
 
 def test_fallback_unwraps_inserted_bare_url_autolinks() -> None:
