@@ -674,6 +674,54 @@ def _iter_inline_code_spans(text: str) -> Iterator[tuple[int, int]]:
         cursor = text.find("`", span_end)
 
 
+def _multiline_code_span_line_map(
+    lines: list[str],
+) -> tuple[list[bool], list[bool]]:
+    """Per-line view of inline code spans that cross soft line breaks.
+
+    Returns ``(interior, continuation)``: ``interior[i]`` is True when line
+    ``i`` carries any part of a multi-line inline code span, and
+    ``continuation[i]`` is True when such a span crosses the boundary between
+    line ``i - 1`` and line ``i``. Spans are computed per non-fenced chunk —
+    backticks inside a fence are literal, and a fence delimiter terminates a
+    span (block structure binds before inline code, as in CommonMark) — using
+    the module's paragraph-bounded span model.
+    """
+    interior = [False] * len(lines)
+    continuation = [False] * len(lines)
+    chunk_indices: list[int] = []
+
+    def flush_chunk() -> None:
+        if not chunk_indices:
+            return
+        offsets: list[int] = []
+        position = 0
+        for index in chunk_indices:
+            offsets.append(position)
+            position += len(lines[index]) + 1
+        chunk_text = "\n".join(lines[index] for index in chunk_indices)
+        for span_start, span_end in _iter_inline_code_spans(chunk_text):
+            if "\n" not in chunk_text[span_start:span_end]:
+                continue
+            for local, line_start in enumerate(offsets):
+                global_index = chunk_indices[local]
+                line_end = line_start + len(lines[global_index])
+                if line_start < span_end and span_start <= line_end:
+                    interior[global_index] = True
+                    if span_start < line_start:
+                        continuation[global_index] = True
+        chunk_indices.clear()
+
+    for index, (_, is_fenced, _) in enumerate(_iter_fence_states(lines)):
+        if is_fenced:
+            flush_chunk()
+            continue
+        chunk_indices.append(index)
+    flush_chunk()
+
+    return interior, continuation
+
+
 def _transform_outside_inline_code(text: str, transform: Callable[[str], str]) -> str:
     """Apply ``transform`` to text while keeping inline code spans verbatim.
 
@@ -1530,6 +1578,8 @@ def normalize_markdown_tables(markdown_text: str) -> str:
             normalized.extend(buffer)
         buffer = []
 
+    span_interior, _ = _multiline_code_span_line_map(lines)
+
     for idx, (line, is_fenced, is_opening) in enumerate(_iter_fence_states(lines)):
         if is_fenced:
             if is_opening:
@@ -1537,9 +1587,22 @@ def normalize_markdown_tables(markdown_text: str) -> str:
             normalized.append(line)
             continue
 
+        if span_interior[idx]:
+            # The line carries part of a multi-line inline code span: Slack
+            # renders that stretch as code, so it is never a table row or a
+            # glued heading, however pipe-like it looks.
+            flush_buffer()
+            normalized.append(line)
+            continue
+
         stripped = line.strip()
 
         next_line = lines[idx + 1] if idx + 1 < len(lines) else None
+        if next_line is not None and span_interior[idx + 1]:
+            # A line carrying part of a multi-line code span is code, not
+            # table evidence: it must neither justify a glued-heading split
+            # nor count as the separator behind an ATX-looking header row.
+            next_line = None
         heading_and_table = _split_heading_and_table_row(line, next_line)
         if heading_and_table:
             flush_buffer()
@@ -2032,6 +2095,22 @@ def _split_lines_to_length(text: str, max_length: int, max_items: int) -> list[s
     current_items = 0
     in_run = False
     active_fence_open: str | None = None
+    lines = text.split("\n")
+    _, span_continuation = _multiline_code_span_line_map(lines)
+    # Keeping a span-crossing boundary glued may exceed the packing target;
+    # the valve bounds that overshoot so shrink-and-retry still converges and
+    # the hard block limit keeps real headroom. A span larger than the valve
+    # is cut anyway (documented limitation).
+    span_valve = min(max_length + 512, SLACK_MAX_MARKDOWN_TEXT_LENGTH - 256)
+    # Total length of the span-connected line group starting at each line,
+    # used to flush *before* a span opener when the accumulated piece would
+    # otherwise push the span past the valve even though the span alone fits.
+    span_group_total = [0] * len(lines)
+    for index in range(len(lines) - 1, -1, -1):
+        continues = index + 1 < len(lines) and span_continuation[index + 1]
+        span_group_total[index] = len(lines[index]) + (
+            1 + span_group_total[index + 1] if continues else 0
+        )
 
     def flush(next_fence_prefix: str | None) -> None:
         nonlocal current, current_len, current_items, in_run
@@ -2053,7 +2132,9 @@ def _split_lines_to_length(text: str, max_length: int, max_items: int) -> list[s
             current_items = 0
             in_run = False
 
-    for line, is_fenced, is_opening in _iter_fence_states(text.split("\n")):
+    for line_index, (line, is_fenced, is_opening) in enumerate(
+        _iter_fence_states(lines)
+    ):
         if is_opening:
             active_fence_open = line
         elif not is_fenced:
@@ -2097,12 +2178,32 @@ def _split_lines_to_length(text: str, max_length: int, max_items: int) -> list[s
                 part_items = 0 if in_run else 1
 
             added = len(part) + (1 if current else 0)
+            keep_span_together = (
+                part_index == 0
+                and span_continuation[line_index]
+                and current_len + added <= span_valve
+            )
+            opens_fitting_span = (
+                part_index == 0
+                and len(line) <= max_length
+                and not span_continuation[line_index]
+                and line_index + 1 < len(lines)
+                and span_continuation[line_index + 1]
+                and span_group_total[line_index] <= span_valve
+            )
+            span_needs_fresh_piece = (
+                opens_fitting_span
+                and current_len + (1 if current else 0) + span_group_total[line_index]
+                > span_valve
+            )
             if (
                 current
                 and not line_is_fence_close
+                and not keep_span_together
                 and (
                     current_len + added > max_length
                     or current_items + part_items > max_items
+                    or span_needs_fresh_piece
                 )
             ):
                 reopen = active_fence_open if active_fence_open != part else None
@@ -2492,6 +2593,7 @@ def _convert_markdown_text_segment_to_blocks(
     blocks: list[dict[str, Any]] = []
     markdown_buffer: list[str] = []
     lines = content.splitlines()
+    span_interior, _ = _multiline_code_span_line_map(lines)
     cursor = 0
 
     def flush_markdown_buffer() -> None:
@@ -2513,6 +2615,14 @@ def _convert_markdown_text_segment_to_blocks(
         markdown_buffer = []
 
     while cursor < len(lines):
+        if span_interior[cursor]:
+            # Part of a multi-line inline code span: Slack renders the
+            # stretch as code, so a block-looking line inside it (an image,
+            # a divider, a quote or list marker) must stay literal text.
+            markdown_buffer.append(lines[cursor])
+            cursor += 1
+            continue
+
         fence = _match_fence_open(lines[cursor])
         if fence is not None and _find_fence_close_index(lines, cursor, fence) is None:
             markdown_buffer.extend(lines[cursor:])
@@ -2522,7 +2632,14 @@ def _convert_markdown_text_segment_to_blocks(
         consumed = _consume_rich_markdown_block(lines, cursor)
         if consumed:
             block, next_cursor = consumed
-            if block is None or _block_text_size(block) > _MESSAGE_BLOCKS_TEXT_TARGET:
+            consumed_range_hits_span = any(
+                span_interior[index] for index in range(cursor, next_cursor)
+            )
+            if (
+                block is None
+                or consumed_range_hits_span
+                or _block_text_size(block) > _MESSAGE_BLOCKS_TEXT_TARGET
+            ):
                 # The region was recognized but must not post as one promoted
                 # block: either the consumer flagged it markdown-only (e.g. a
                 # quote whose code span crosses lines), or it is oversized —
@@ -2569,10 +2686,14 @@ def split_markdown_into_segments(markdown_text: str) -> list[dict[str, str]]:
         current = []
         current_is_table = None
 
-    for line, is_fenced, _ in _iter_fence_states(lines):
+    span_interior, _ = _multiline_code_span_line_map(lines)
+
+    for index, (line, is_fenced, _) in enumerate(_iter_fence_states(lines)):
         stripped = line.strip()
         is_table_line = (
-            False if is_fenced else stripped.startswith("|") and stripped.endswith("|")
+            False
+            if is_fenced or span_interior[index]
+            else stripped.startswith("|") and stripped.endswith("|")
         )
 
         if current_is_table is None:

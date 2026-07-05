@@ -241,7 +241,7 @@ Long or heading-dense non-table regions are therefore split before delivery:
 
 ## Known limitations
 
-- The line-oriented block machinery — rich-block promotion, table segmentation, and intra-paragraph splitting — is not aware of inline code spans that cross soft line breaks. A block-syntax line (image, table row, fence) sitting inside such a span can still be promoted to a real block, and a split of an over-budget paragraph can cut such a span apart, leaving unmatched backticks. The content-rewriting stages (decode, sanitize, URL, underscore, zero-width spaces) do respect these spans. Multi-line single-backtick spans wrapping block-like content are rare in practice — multi-line code is normally fenced — and span-aware line consumption is planned as follow-up work.
+- The line-oriented block machinery is aware of inline code spans that cross soft line breaks: a block-syntax line (image, divider, quote, list, table row) inside such a span stays literal markdown text, table segmentation and normalization skip those lines, and the intra-paragraph splitter keeps a span-crossing line boundary glued within a size valve (packing target + 512 characters, capped below the hard block limit). Two residual gaps remain: a span larger than that valve — or a single span-interior line longer than the packing budget — is still cut apart, and a fence delimiter line still terminates a span (block structure binds before inline code, as in CommonMark), so fence-looking lines inside a span open a real fence.
 
 ## Optional blank-line visibility workaround
 
