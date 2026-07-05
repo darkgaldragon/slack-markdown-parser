@@ -55,10 +55,21 @@ INLINE_CODE_SPAN_PATTERN = re.compile(r"(?<!`)`[^`\n]+`(?!`)", flags=re.DOTALL)
 # (The single-``*`` italic body is intentionally not bounded this way: italics
 # legitimately wrap ``**bold**`` and ``*`` is heavily overloaded, so it keeps the
 # whitespace guard only.)
+#
+# Every body additionally may not cross a blank line (``(?!\n[ \t]*\n)``):
+# CommonMark emphasis never spans paragraphs, so a stray ``*``/``**``/``~~`` in
+# one paragraph must not pair with a stray marker in a later paragraph and get
+# ZWSP-padded as though it were one span.
 EMPHASIS_PATTERNS = (
-    re.compile(r"(?<!\*)\*\*(?!\s)((?:(?!\*\*).)+?)(?<!\s)\*\*(?!\*)", flags=re.DOTALL),
-    re.compile(r"(?<!\*)\*(?!\*)(?!\s)(.+?)(?<!\s)(?<!\*)\*(?!\*)", flags=re.DOTALL),
-    re.compile(r"~~(?!\s)((?:(?!~~).)+?)(?<!\s)~~", flags=re.DOTALL),
+    re.compile(
+        r"(?<!\*)\*\*(?!\s)((?:(?!\*\*|\n[ \t]*\n).)+?)(?<!\s)\*\*(?!\*)",
+        flags=re.DOTALL,
+    ),
+    re.compile(
+        r"(?<!\*)\*(?!\*)(?!\s)((?:(?!\n[ \t]*\n).)+?)(?<!\s)(?<!\*)\*(?!\*)",
+        flags=re.DOTALL,
+    ),
+    re.compile(r"~~(?!\s)((?:(?!~~|\n[ \t]*\n).)+?)(?<!\s)~~", flags=re.DOTALL),
 )
 INLINE_CODE_PLACEHOLDER_PATTERN = re.compile(r"\ufff0code\d+\ufff1")
 PROTECTED_UNDERSCORE_SPAN_PATTERN = re.compile(
@@ -779,7 +790,14 @@ def normalize_bare_urls_for_slack_markdown(text: str) -> str:
 
             if char == "`":
                 code_span_end = _find_inline_code_span_end(chunk, cursor)
-                if code_span_end is not None:
+                # Same single-line span model as _transform_outside_inline_code:
+                # without the newline bound, one stray backtick would pair with
+                # a backtick on a later line and leave every bare URL between
+                # them unwrapped.
+                if (
+                    code_span_end is not None
+                    and "\n" not in chunk[cursor:code_span_end]
+                ):
                     parts.append(chunk[cursor:code_span_end])
                     cursor = code_span_end
                     continue
@@ -1296,8 +1314,17 @@ def _split_heading_prefix_and_first_cell(
 def _split_heading_and_table_row(
     line: str, next_line: str | None = None
 ) -> tuple[str, str] | None:
-    """Split lines like '# Heading |a|b|' into heading and table row."""
+    """Split lines like '# Heading |a|b|' into heading and table row.
+
+    The split targets one specific LLM failure mode: a table's header row
+    glued onto the heading line, with the real data rows following. A heading
+    that merely contains a pipe (``## Phase 1 | Overview``) is not that
+    pattern, so the split requires a table-like (pipe-carrying) next line;
+    without one the heading is left intact.
+    """
     if "|" not in line:
+        return None
+    if not next_line or "|" not in next_line:
         return None
 
     escaped = False
@@ -2367,9 +2394,19 @@ def _convert_markdown_text_segment_to_blocks(
 
         consumed = _consume_rich_markdown_block(lines, cursor)
         if consumed:
+            block, next_cursor = consumed
+            if _block_text_size(block) > _MESSAGE_BLOCKS_TEXT_TARGET:
+                # A promoted block posts as-is: unlike markdown blocks it has
+                # no splitting machinery, so one oversized rich_text (a huge
+                # fence, quote, or list) would fail the whole message with
+                # ``msg_blocks_too_long``. Keep the raw lines in the markdown
+                # buffer instead, whose splitter handles any size.
+                markdown_buffer.extend(lines[cursor:next_cursor])
+                cursor = next_cursor
+                continue
             flush_markdown_buffer()
-            block, cursor = consumed
             blocks.append(block)
+            cursor = next_cursor
             while cursor < len(lines) and not lines[cursor].strip():
                 cursor += 1
             continue
@@ -2659,6 +2696,9 @@ def _blocks_to_downgrade_parts(
             parts.append(getattr(block, "_plain_text", None) or "---")
         elif not fallback:
             text = block.get("text", "")
+            if isinstance(text, dict):
+                # e.g. a ``section`` block carries ``text: {type, text}``.
+                text = text.get("text", "")
             if text:
                 parts.append(str(text))
 

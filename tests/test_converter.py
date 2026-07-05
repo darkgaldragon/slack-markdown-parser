@@ -203,6 +203,65 @@ def test_unclosed_fence_split_reopens_fence_in_continuation() -> None:
     assert all(block["text"].startswith("```python") for block in blocks[1:])
 
 
+def test_oversized_closed_fence_falls_back_to_split_markdown_blocks() -> None:
+    # A closed fence whose content exceeds the per-message text budget must
+    # not become one giant rich_text block — Slack would reject the whole
+    # message with msg_blocks_too_long. It falls back to the markdown path,
+    # which splits it and reopens the fence in each continuation.
+    code_lines = [f"log line {index} " + "x" * 40 for index in range(400)]
+    raw = "```text\n" + "\n".join(code_lines) + "\n```"
+    assert len(raw) > 13200
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) > 1
+    assert all(block["type"] == "markdown" for block in blocks)
+    assert all(len(block["text"]) <= 12000 for block in blocks)
+    for message in convert_markdown_to_slack_messages(raw):
+        assert sum(_block_text_size(block) for block in message) <= 13200
+    rebuilt_code_lines = [
+        line
+        for block in blocks
+        for line in block["text"].split("\n")
+        if not line.startswith("```")
+    ]
+    assert rebuilt_code_lines == code_lines
+
+
+def test_oversized_quote_falls_back_to_split_markdown_blocks() -> None:
+    raw = "\n".join("> 引用テキスト" + "あ" * 100 for _ in range(150))
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) > 1
+    assert all(block["type"] == "markdown" for block in blocks)
+    for message in convert_markdown_to_slack_messages(raw):
+        assert sum(_block_text_size(block) for block in message) <= 13200
+
+
+def test_oversized_list_falls_back_to_split_markdown_blocks() -> None:
+    raw = "\n".join(f"- 項目{index} " + "い" * 100 for index in range(150))
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) > 1
+    assert all(block["type"] == "markdown" for block in blocks)
+    for message in convert_markdown_to_slack_messages(raw):
+        assert sum(_block_text_size(block) for block in message) <= 13200
+
+
+def test_fence_quote_and_list_under_budget_still_promote() -> None:
+    raw = "```python\nprint(1)\n```\n\n> 引用\n\n- 項目"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert [block["type"] for block in blocks] == [
+        "rich_text",
+        "rich_text",
+        "rich_text",
+    ]
+
+
 def test_long_document_split_respects_preserve_visual_blank_lines() -> None:
     raw = "\n\n".join(
         f"paragraph {index} with enough text to need splitting\n\ncontinued"
@@ -371,6 +430,28 @@ value A | value B
     table = _first_table(blocks)
     headers = [extract_plain_text_from_table_cell(cell) for cell in table["rows"][0]]
     assert headers == ["Header A", "Header B"]
+
+
+def test_heading_with_pipe_not_followed_by_table_stays_intact() -> None:
+    # The glued-header split only applies when a table actually follows. A
+    # heading that merely contains a pipe must survive verbatim instead of
+    # being torn into a bogus heading + orphan "|1|Overview|" line.
+    raw = "## Phase 1 | Overview\n\n本文です。"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert all(block.get("type") == "markdown" for block in blocks)
+    assert "## Phase 1 | Overview" in blocks[0]["text"]
+
+
+def test_heading_with_pipe_at_end_of_document_stays_intact() -> None:
+    raw = "## Results Before | After"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) == 1
+    assert blocks[0]["type"] == "markdown"
+    assert blocks[0]["text"] == "## Results Before | After"
 
 
 def test_empty_table_cell_is_filled_with_dash() -> None:
@@ -1154,6 +1235,17 @@ def test_dangling_bold_opener_keeps_following_span_bold() -> None:
     assert converted == "**oops ** and **70.9%→83.0%\u200b**、"
 
 
+def test_emphasis_markers_do_not_pair_across_blank_lines() -> None:
+    # CommonMark emphasis never spans paragraphs: a stray marker in one
+    # paragraph must not pair with a stray marker in a later paragraph and
+    # get ZWSP-padded as though it were one span.
+    text = "重みは*0.5。\n\n値は3.2*です"
+    assert add_zero_width_spaces_to_markdown(text) == text
+
+    text_bold = "係数は**0.5。\n\n上限は3.2**です"
+    assert add_zero_width_spaces_to_markdown(text_bold) == text_bold
+
+
 def test_blocks_to_plain_text_and_fallback_generation() -> None:
     raw = """# Title
 
@@ -1169,6 +1261,14 @@ def test_blocks_to_plain_text_and_fallback_generation() -> None:
     assert "Title" in plain
     assert "Name | Score" in plain
     assert "UserA | 100" in fallback
+
+
+def test_blocks_to_plain_text_reads_section_text_object() -> None:
+    # A foreign ``section`` block carries ``text`` as an object, not a string;
+    # the plain-text view must surface the inner text, not ``str(dict)``.
+    section = {"type": "section", "text": {"type": "mrkdwn", "text": "hello"}}
+
+    assert blocks_to_plain_text([section]) == "hello"
 
 
 def test_decode_html_entities() -> None:
@@ -1333,6 +1433,17 @@ def test_normalize_bare_urls_preserves_markdown_links_and_code_spans() -> None:
 
     assert "[Example](https://example.com/docs)" in converted
     assert "`https://example.com/code`" in converted
+
+
+def test_stray_backticks_on_different_lines_do_not_block_url_autolink() -> None:
+    # A code span is bounded to a single line (the module's span model): one
+    # stray backtick must not pair with a backtick on a later line and leave
+    # the bare URL between them unwrapped.
+    converted = normalize_bare_urls_for_slack_markdown(
+        "これは ` 迷子の記号です\nhttps://example.com を見てください\nそして ` もう一つ"
+    )
+
+    assert "<https://example.com>" in converted
 
 
 def test_fallback_unwraps_inserted_bare_url_autolinks() -> None:
