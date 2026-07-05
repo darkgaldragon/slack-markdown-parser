@@ -1598,6 +1598,11 @@ def normalize_markdown_tables(markdown_text: str) -> str:
         stripped = line.strip()
 
         next_line = lines[idx + 1] if idx + 1 < len(lines) else None
+        if next_line is not None and span_interior[idx + 1]:
+            # A line carrying part of a multi-line code span is code, not
+            # table evidence: it must neither justify a glued-heading split
+            # nor count as the separator behind an ATX-looking header row.
+            next_line = None
         heading_and_table = _split_heading_and_table_row(line, next_line)
         if heading_and_table:
             flush_buffer()
@@ -2097,6 +2102,15 @@ def _split_lines_to_length(text: str, max_length: int, max_items: int) -> list[s
     # the hard block limit keeps real headroom. A span larger than the valve
     # is cut anyway (documented limitation).
     span_valve = min(max_length + 512, SLACK_MAX_MARKDOWN_TEXT_LENGTH - 256)
+    # Total length of the span-connected line group starting at each line,
+    # used to flush *before* a span opener when the accumulated piece would
+    # otherwise push the span past the valve even though the span alone fits.
+    span_group_total = [0] * len(lines)
+    for index in range(len(lines) - 1, -1, -1):
+        continues = index + 1 < len(lines) and span_continuation[index + 1]
+        span_group_total[index] = len(lines[index]) + (
+            1 + span_group_total[index + 1] if continues else 0
+        )
 
     def flush(next_fence_prefix: str | None) -> None:
         nonlocal current, current_len, current_items, in_run
@@ -2169,6 +2183,19 @@ def _split_lines_to_length(text: str, max_length: int, max_items: int) -> list[s
                 and span_continuation[line_index]
                 and current_len + added <= span_valve
             )
+            opens_fitting_span = (
+                part_index == 0
+                and len(line) <= max_length
+                and not span_continuation[line_index]
+                and line_index + 1 < len(lines)
+                and span_continuation[line_index + 1]
+                and span_group_total[line_index] <= span_valve
+            )
+            span_needs_fresh_piece = (
+                opens_fitting_span
+                and current_len + (1 if current else 0) + span_group_total[line_index]
+                > span_valve
+            )
             if (
                 current
                 and not line_is_fence_close
@@ -2176,6 +2203,7 @@ def _split_lines_to_length(text: str, max_length: int, max_items: int) -> list[s
                 and (
                     current_len + added > max_length
                     or current_items + part_items > max_items
+                    or span_needs_fresh_piece
                 )
             ):
                 reopen = active_fence_open if active_fence_open != part else None
@@ -2604,7 +2632,14 @@ def _convert_markdown_text_segment_to_blocks(
         consumed = _consume_rich_markdown_block(lines, cursor)
         if consumed:
             block, next_cursor = consumed
-            if block is None or _block_text_size(block) > _MESSAGE_BLOCKS_TEXT_TARGET:
+            consumed_range_hits_span = any(
+                span_interior[index] for index in range(cursor, next_cursor)
+            )
+            if (
+                block is None
+                or consumed_range_hits_span
+                or _block_text_size(block) > _MESSAGE_BLOCKS_TEXT_TARGET
+            ):
                 # The region was recognized but must not post as one promoted
                 # block: either the consumer flagged it markdown-only (e.g. a
                 # quote whose code span crosses lines), or it is oversized —
