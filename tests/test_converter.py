@@ -15,6 +15,7 @@ from slack_markdown_parser import (
     convert_markdown_to_slack_payloads,
     decode_html_entities,
     extract_plain_text_from_table_cell,
+    normalize_bare_urls_for_slack_markdown,
     normalize_markdown_tables,
     normalize_underscore_emphasis,
     sanitize_slack_text,
@@ -22,7 +23,6 @@ from slack_markdown_parser import (
 from slack_markdown_parser.converter import (
     _block_text_size,
     _estimate_markdown_expansion_items,
-    normalize_bare_urls_for_slack_markdown,
 )
 
 
@@ -1780,7 +1780,7 @@ def test_fallback_unwraps_inserted_bare_url_autolinks() -> None:
 
 
 def test_bare_url_does_not_swallow_following_cjk() -> None:
-    # Regression (#chloe): a scheme URL glued directly to CJK text used to be
+    # Regression: a scheme URL glued directly to CJK text used to be
     # matched greedily to end-of-line, dragging the closing paren, the bold
     # markers, and the rest of the sentence into one autolink. The URL must be
     # trimmed to its real extent so the surrounding markup survives.

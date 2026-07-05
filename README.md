@@ -123,7 +123,7 @@ for payload in convert_markdown_to_slack_payloads(
     print(payload)
 ```
 
-`convert_markdown_to_slack_messages` automatically splits output into multiple messages when the input contains multiple tables, and also when long or heading-dense content would exceed Slack's per-block and per-message size limits.
+`convert_markdown_to_slack_payloads` automatically splits output into multiple messages when the input contains multiple tables, and also when long or heading-dense content would exceed Slack's per-block and per-message size limits.
 Set `preserve_visual_blank_lines=True` when you want the parser to compensate
 for Slack's currently tight paragraph spacing inside `markdown` blocks.
 The blank-line workaround is intentionally narrow: it skips table segments and
@@ -198,6 +198,7 @@ Slack Markdown rendering or keep list formatting open in some clients.
 |---|---|
 | `normalize_markdown_tables(markdown_text) -> str` | Normalize Markdown table syntax before conversion. |
 | `normalize_underscore_emphasis(text) -> str` | Convert `_..._` / `__...__` underscore emphasis into Slack-friendly asterisk emphasis. |
+| `normalize_bare_urls_for_slack_markdown(text) -> str` | Wrap bare URLs into Slack-friendly `<https://...>` autolink form, trimming each URL to its real extent (GFM-style) so adjacent CJK text and emphasis markers survive. |
 | `add_zero_width_spaces_to_markdown(text) -> str` | Insert zero-width spaces around formatting tokens where Slack needs stronger boundaries. |
 | `decode_html_entities(text) -> str` | Decode HTML entities in prose before parsing; fenced code and inline code stay verbatim. |
 | `sanitize_slack_text(text) -> str` | Remove ANSI/control noise and reserved marker code points, and neutralize invalid Slack angle-bracket tokens outside code regions. |

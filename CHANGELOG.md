@@ -6,6 +6,21 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 ## [Unreleased]
 
+### Added
+
+- Exported `normalize_bare_urls_for_slack_markdown` as part of the public package API. It wraps bare URLs into Slack-friendly `<https://...>` autolink form, trimming each URL to its real extent (GFM-style) so adjacent CJK text and emphasis markers survive. The behavior is unchanged; only its name was already public-shaped while the function was reachable solely through the internal `slack_markdown_parser.converter` module, so it is now listed in `__all__` and the README utility tables.
+
+### Changed
+
+- Renamed the internal table-candidate heuristic `looks_like_markdown_table` to `_looks_like_markdown_table` to match its single-caller, internal-only status. It was never listed in `__all__` or the public docs, so this only affects code that imported it directly from `slack_markdown_parser.converter`.
+
+### Documentation
+
+- Added the "Lower-level exported helpers" section to `README-ja.md` so the Japanese README lists the same public helpers as the English README.
+- Documented promoted-list-item Slack mention token conversion in `docs/spec-ja.md`, matching `docs/spec.md`.
+- Aligned the Quick start prose in `README.md` / `README-ja.md` with the `convert_markdown_to_slack_payloads` call the example actually uses.
+- Listed `docs/_internal/fix-and-release-playbook.md` in the CONTRIBUTING maintainer QA doc index.
+
 ## [2.6.0] - 2026-07-05
 
 ### Added

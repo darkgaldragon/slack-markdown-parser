@@ -1633,7 +1633,7 @@ def normalize_markdown_tables(markdown_text: str) -> str:
     return "\n".join(normalized)
 
 
-def looks_like_markdown_table(text: str) -> bool:
+def _looks_like_markdown_table(text: str) -> bool:
     """Heuristic check for markdown table candidates."""
     lines = [line for line in text.splitlines() if line.strip()]
     if len(lines) < 2:
@@ -2729,7 +2729,7 @@ def convert_markdown_to_slack_blocks(
         if not content.strip():
             continue
 
-        if segment.get("type") == "table" and looks_like_markdown_table(content):
+        if segment.get("type") == "table" and _looks_like_markdown_table(content):
             table_block = markdown_table_to_slack_table(content)
             if table_block:
                 blocks.append(table_block)
