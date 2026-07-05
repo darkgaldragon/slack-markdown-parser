@@ -40,7 +40,6 @@ STANDALONE_IMAGE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 MARKDOWN_LINK_PATTERN = re.compile(r"\[[^\]\n]+\]\([^\)\n]+\)")
-INLINE_CODE_SPAN_PATTERN = re.compile(r"(?<!`)`[^`\n]+`(?!`)", flags=re.DOTALL)
 # Emphasis delimiters must satisfy CommonMark's minimal flanking requirement:
 # an opening run is not followed by whitespace and a closing run is not preceded
 # by whitespace. Enforcing this keeps a stray, whitespace-flanked delimiter
@@ -55,12 +54,27 @@ INLINE_CODE_SPAN_PATTERN = re.compile(r"(?<!`)`[^`\n]+`(?!`)", flags=re.DOTALL)
 # (The single-``*`` italic body is intentionally not bounded this way: italics
 # legitimately wrap ``**bold**`` and ``*`` is heavily overloaded, so it keeps the
 # whitespace guard only.)
+#
+# Every body additionally may not cross a blank line (``(?!\n[ \t\r]*\n)``,
+# CRLF included): CommonMark emphasis never spans paragraphs, so a stray
+# ``*``/``**``/``~~`` in one paragraph must not pair with a stray marker in a
+# later paragraph and get ZWSP-padded as though it were one span.
 EMPHASIS_PATTERNS = (
-    re.compile(r"(?<!\*)\*\*(?!\s)((?:(?!\*\*).)+?)(?<!\s)\*\*(?!\*)", flags=re.DOTALL),
-    re.compile(r"(?<!\*)\*(?!\*)(?!\s)(.+?)(?<!\s)(?<!\*)\*(?!\*)", flags=re.DOTALL),
-    re.compile(r"~~(?!\s)((?:(?!~~).)+?)(?<!\s)~~", flags=re.DOTALL),
+    re.compile(
+        r"(?<!\*)\*\*(?!\s)((?:(?!\*\*|\n[ \t\r]*\n).)+?)(?<!\s)\*\*(?!\*)",
+        flags=re.DOTALL,
+    ),
+    re.compile(
+        r"(?<!\*)\*(?!\*)(?!\s)((?:(?!\n[ \t\r]*\n).)+?)(?<!\s)(?<!\*)\*(?!\*)",
+        flags=re.DOTALL,
+    ),
+    re.compile(r"~~(?!\s)((?:(?!~~|\n[ \t\r]*\n).)+?)(?<!\s)~~", flags=re.DOTALL),
 )
 INLINE_CODE_PLACEHOLDER_PATTERN = re.compile(r"\ufff0code\d+\ufff1")
+# A blank line ends the paragraph, and with it any possible code span: Slack
+# pairs backticks across soft line breaks but never across paragraphs. The
+# ``\r`` in the class keeps CRLF blank lines (``\r\n\r\n``) recognized too.
+_CODE_SPAN_BLANK_LINE_PATTERN = re.compile(r"\n[ \t\r]*\n")
 PROTECTED_UNDERSCORE_SPAN_PATTERN = re.compile(
     r"`[^`\n]+`"
     r"|\[[^\]\n]+\]\([^\)\n]+\)"
@@ -633,13 +647,39 @@ def _find_inline_code_span_end(text: str, start: int) -> int | None:
         cursor = run_end
 
 
+def _iter_inline_code_spans(text: str) -> Iterator[tuple[int, int]]:
+    """Yield ``(start, end)`` for each inline code span in ``text``.
+
+    Single source of truth for the module's span model: a span closes only on
+    a backtick run of the *same* length as its opener, may cross soft line
+    breaks, and never crosses a blank line. This matches measured Slack
+    rendering (2026-07-05): Slack pairs backticks across soft line breaks
+    within a paragraph and renders the stretch as inline code, while
+    backticks in different paragraphs never pair — so the blank-line bound
+    keeps one stray backtick from affecting anything beyond its paragraph.
+    """
+    cursor = text.find("`")
+    while cursor != -1:
+        span_end = _find_inline_code_span_end(text, cursor)
+        if span_end is None or _CODE_SPAN_BLANK_LINE_PATTERN.search(
+            text, cursor, span_end
+        ):
+            # No same-paragraph closing run: the backticks are literal text.
+            delimiter_end = cursor
+            while delimiter_end < len(text) and text[delimiter_end] == "`":
+                delimiter_end += 1
+            cursor = text.find("`", delimiter_end)
+            continue
+        yield cursor, span_end
+        cursor = text.find("`", span_end)
+
+
 def _transform_outside_inline_code(text: str, transform: Callable[[str], str]) -> str:
     """Apply ``transform`` to text while keeping inline code spans verbatim.
 
-    Spans are bounded to a single line, matching this module's span model
-    (``INLINE_CODE_SPAN_PATTERN``). Without that bound, one stray backtick
-    would pair with a backtick on a much later line and silently suppress
-    sanitization for everything in between.
+    Spans follow the module's paragraph-bounded span model
+    (``_iter_inline_code_spans``): rewriting a span's content would visibly
+    corrupt what Slack renders as code.
 
     Spans are replaced with placeholder tokens (which contain no backticks or
     angle brackets) rather than split out, so the transform still sees any
@@ -653,22 +693,12 @@ def _transform_outside_inline_code(text: str, transform: Callable[[str], str]) -
     spans: list[str] = []
     parts: list[str] = []
     plain_start = 0
-    cursor = text.find("`")
 
-    while cursor != -1:
-        span_end = _find_inline_code_span_end(text, cursor)
-        if span_end is None or "\n" in text[cursor:span_end]:
-            # No same-line closing run: the backticks are literal text.
-            delimiter_end = cursor
-            while delimiter_end < len(text) and text[delimiter_end] == "`":
-                delimiter_end += 1
-            cursor = text.find("`", delimiter_end)
-            continue
-        parts.append(text[plain_start:cursor])
+    for start, end in _iter_inline_code_spans(text):
+        parts.append(text[plain_start:start])
         parts.append(f"\ufff0code{len(spans)}\ufff1")
-        spans.append(text[cursor:span_end])
-        plain_start = span_end
-        cursor = text.find("`", span_end)
+        spans.append(text[start:end])
+        plain_start = end
 
     parts.append(text[plain_start:])
     transformed = transform("".join(parts))
@@ -779,10 +809,30 @@ def normalize_bare_urls_for_slack_markdown(text: str) -> str:
 
             if char == "`":
                 code_span_end = _find_inline_code_span_end(chunk, cursor)
-                if code_span_end is not None:
+                # Same paragraph-bounded span model as
+                # _transform_outside_inline_code: Slack pairs backticks across
+                # soft line breaks, so a URL inside such a span must stay bare
+                # — wrapping it would show a literal ``<…>`` inside the
+                # rendered code span.
+                if (
+                    code_span_end is not None
+                    and not _CODE_SPAN_BLANK_LINE_PATTERN.search(
+                        chunk, cursor, code_span_end
+                    )
+                ):
                     parts.append(chunk[cursor:code_span_end])
                     cursor = code_span_end
                     continue
+                # No same-paragraph span: skip the whole backtick run, as
+                # _iter_inline_code_spans does. Restarting inside the run
+                # would open a fake shorter-delimiter span and swallow a
+                # later real span together with its content.
+                run_end = cursor
+                while run_end < len(chunk) and chunk[run_end] == "`":
+                    run_end += 1
+                parts.append(chunk[cursor:run_end])
+                cursor = run_end
+                continue
 
             url_match = BARE_URL_PATTERN.match(chunk, cursor)
             if url_match:
@@ -901,10 +951,16 @@ def _split_fenced_code_chunks(text: str) -> list[tuple[bool, str]]:
 
 
 def _normalize_underscore_emphasis_chunk(text: str) -> str:
-    # Same defense as _format_markdown_with_spacing_metadata: reserved marker
-    # code points in direct-call input must not collide with the numbered
-    # placeholders below.
-    text = INTERNAL_MARKER_CHAR_PATTERN.sub("", text)
+    # Inline code spans are paragraph-bounded (the module's span model) and
+    # must stay verbatim: Slack renders them as code, where a rewritten
+    # ``_value_`` is visible corruption. The single-line backtick alternative
+    # in PROTECTED_UNDERSCORE_SPAN_PATTERN cannot cover a span that crosses a
+    # soft line break, so the shared span walker protects those first (it
+    # also strips the reserved marker code points).
+    return _transform_outside_inline_code(text, _normalize_underscore_emphasis_prose)
+
+
+def _normalize_underscore_emphasis_prose(text: str) -> str:
     protected_spans: list[str] = []
 
     def protect(match: re.Match[str]) -> str:
@@ -956,8 +1012,10 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, list[int]]:
     boundary_chars = {*VISIBLE_BOUNDARY_CHARS, ZWSP, SYNTH_SPACE_MARKER}
 
     def wrap_match(match: re.Match[str], source: str) -> str:
-        start, end = match.start(), match.end()
-        token = match.group(0)
+        return wrap_span(source, match.start(), match.end())
+
+    def wrap_span(source: str, start: int, end: int) -> str:
+        token = source[start:end]
         # The start/end of the chunk are effective boundaries: there is no
         # adjacent text to separate the marker from, so they are safe. Treating
         # them as unsafe used to append a ZWSP right after a closing marker, and
@@ -1105,15 +1163,15 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, list[int]]:
         protected_parts: list[str] = []
         last_end = 0
 
-        for idx, match in enumerate(INLINE_CODE_SPAN_PATTERN.finditer(segment)):
+        for idx, (span_start, span_end) in enumerate(_iter_inline_code_spans(segment)):
             placeholder = f"\ufff0code{idx}\ufff1"
-            protected_parts.append(segment[last_end : match.start()])
+            protected_parts.append(segment[last_end:span_start])
             protected_parts.append(placeholder)
             placeholder_map[placeholder] = {
-                "raw": match.group(0),
-                "wrapped": wrap_match(match, segment),
+                "raw": segment[span_start:span_end],
+                "wrapped": wrap_span(segment, span_start, span_end),
             }
-            last_end = match.end()
+            last_end = span_end
 
         protected_parts.append(segment[last_end:])
         protected_segment = "".join(protected_parts)
@@ -1280,9 +1338,15 @@ def _split_heading_prefix_and_first_cell(
     if len(tokens) < 2:
         return None
 
-    first_cell_words = _count_cell_words(reference_cell or "")
-    first_cell_words = min(first_cell_words, len(tokens) - 1)
+    reference_words = _count_cell_words(reference_cell or "")
+    first_cell_words = min(reference_words, len(tokens) - 1)
     if first_cell_words <= 0:
+        return None
+    if first_cell_words != reference_words:
+        # The heading tail cannot supply a first cell shaped like the
+        # reference row's first cell, so this is a heading that merely
+        # contains a pipe (``## Phase 1 | Overview`` followed by prose with
+        # a pipe), not a glued table header.
         return None
 
     heading_tokens = tokens[:-first_cell_words]
@@ -1296,8 +1360,17 @@ def _split_heading_prefix_and_first_cell(
 def _split_heading_and_table_row(
     line: str, next_line: str | None = None
 ) -> tuple[str, str] | None:
-    """Split lines like '# Heading |a|b|' into heading and table row."""
+    """Split lines like '# Heading |a|b|' into heading and table row.
+
+    The split targets one specific LLM failure mode: a table's header row
+    glued onto the heading line, with the real data rows following. A heading
+    that merely contains a pipe (``## Phase 1 | Overview``) is not that
+    pattern, so the split requires a table-like (pipe-carrying) next line;
+    without one the heading is left intact.
+    """
     if "|" not in line:
+        return None
+    if not next_line or "|" not in next_line:
         return None
 
     escaped = False
@@ -1473,7 +1546,21 @@ def normalize_markdown_tables(markdown_text: str) -> str:
             heading_text, table_line = heading_and_table
             normalized.append(heading_text)
             buffer.append(table_line)
-        elif "|" in stripped:
+        elif "|" in stripped and (
+            buffer
+            or not ATX_HEADING_PATTERN.match(line)
+            or bool(
+                next_line is not None
+                and LOOSE_TABLE_SEPARATOR_PATTERN.match(next_line.strip())
+            )
+        ):
+            # A heading-looking line whose glued-header split was rejected
+            # only escapes buffering when it would *start* a candidate run: a
+            # heading that merely contains a pipe must not seed the
+            # pipe-completion heuristic. Inside an already-buffered run it is
+            # kept — there it is a data row whose first cell begins with '#'
+            # — and a following separator row proves a table context, so a
+            # header row whose first cell begins with '#' seeds the run too.
             buffer.append(line)
         else:
             flush_buffer()
@@ -1888,17 +1975,44 @@ def _split_text_at_blank_lines(text: str, max_length: int, max_items: int) -> li
     return pieces
 
 
+_QUOTE_MARKER_PREFIX_PATTERN = re.compile(r"^[ \t]{0,3}>[ \t]?")
+
+
+def _split_line_verbatim_to_length(line: str, max_length: int) -> list[str]:
+    """Hard-cut one overlong line into parts, preserving every character.
+
+    For fenced code lines only: the prose splitter prefers a space boundary
+    and drops that space — silently altering code — and its quote/list
+    marker handling must not apply to a code line that merely starts with
+    ``> `` or ``- ``.
+    """
+    return [line[i : i + max_length] for i in range(0, len(line), max_length)]
+
+
 def _split_single_line_to_length(line: str, max_length: int) -> list[str]:
-    """Split one overlong line, preferring a space boundary near the limit."""
+    """Split one overlong prose line, preferring a space boundary near the
+    limit.
+
+    A leading quote or list marker is never split off on its own (the space
+    search starts after it), and a quote marker is re-applied to continuation
+    parts so consecutive parts keep rendering as one quote. List continuations
+    stay unmarked: as following lines they are lazy item continuations.
+    """
+    quote_match = _QUOTE_MARKER_PREFIX_PATTERN.match(line)
+    marker_match = quote_match or LIST_ITEM_PATTERN.match(line)
+    prefix_end = marker_match.end() if marker_match else 0
+    continuation_prefix = quote_match.group(0) if quote_match else ""
+
     parts: list[str] = []
     while len(line) > max_length:
-        cut = line.rfind(" ", 1, max_length + 1)
-        if cut <= 0:
+        cut = line.rfind(" ", prefix_end + 1, max_length + 1)
+        if cut <= prefix_end:
             parts.append(line[:max_length])
-            line = line[max_length:]
+            line = continuation_prefix + line[max_length:]
         else:
             parts.append(line[:cut])
-            line = line[cut + 1 :]
+            line = continuation_prefix + line[cut + 1 :]
+        prefix_end = len(continuation_prefix)
     parts.append(line)
     return parts
 
@@ -1921,7 +2035,12 @@ def _split_lines_to_length(text: str, max_length: int, max_items: int) -> list[s
 
     def flush(next_fence_prefix: str | None) -> None:
         nonlocal current, current_len, current_items, in_run
-        if current:
+        # A piece holding nothing but the fence-open line being reopened is a
+        # synthetic duplicate (the opener was consumed, the first body part
+        # overflowed): emitting it would post a stray delimiter-only block.
+        if current and not (
+            next_fence_prefix is not None and current == [next_fence_prefix]
+        ):
             pieces.append("\n".join(current))
         if next_fence_prefix:
             current = [next_fence_prefix]
@@ -1940,6 +2059,17 @@ def _split_lines_to_length(text: str, max_length: int, max_items: int) -> list[s
         elif not is_fenced:
             active_fence_open = None
 
+        # A fence-close line never starts a new piece: flushing on it would
+        # emit the close (plus reopened fence) as a stray delimiter-only
+        # block. Appending it may exceed the packing target by a few
+        # characters, well within the headroom to the hard limit.
+        line_is_fence_close = False
+        if is_fenced and not is_opening and active_fence_open is not None:
+            open_spec = _match_fence_open(active_fence_open)
+            line_is_fence_close = open_spec is not None and _is_fence_close(
+                line, open_spec
+            )
+
         line_is_blank = not is_fenced and not line.strip()
         line_is_breaker = (
             not is_fenced
@@ -1950,7 +2080,11 @@ def _split_lines_to_length(text: str, max_length: int, max_items: int) -> list[s
         for part_index, part in enumerate(
             [line]
             if len(line) <= max_length
-            else _split_single_line_to_length(line, max_length)
+            else (
+                _split_line_verbatim_to_length(line, max_length)
+                if is_fenced
+                else _split_single_line_to_length(line, max_length)
+            )
         ):
             # Word-split continuations of a breaker line render as plain
             # content, so only the first part keeps the breaker class.
@@ -1963,9 +2097,13 @@ def _split_lines_to_length(text: str, max_length: int, max_items: int) -> list[s
                 part_items = 0 if in_run else 1
 
             added = len(part) + (1 if current else 0)
-            if current and (
-                current_len + added > max_length
-                or current_items + part_items > max_items
+            if (
+                current
+                and not line_is_fence_close
+                and (
+                    current_len + added > max_length
+                    or current_items + part_items > max_items
+                )
             ):
                 reopen = active_fence_open if active_fence_open != part else None
                 flush(reopen)
@@ -2127,7 +2265,7 @@ def _quote_lines_are_simple(lines: list[str]) -> bool:
 
 def _consume_quote_block(
     lines: list[str], start: int
-) -> tuple[dict[str, Any], int] | None:
+) -> tuple[dict[str, Any] | None, int] | None:
     if _strip_quote_marker(lines[start]) is None:
         return None
 
@@ -2146,6 +2284,16 @@ def _consume_quote_block(
     quote_text = "\n".join(quote_lines).strip()
     if not quote_text:
         return None
+
+    if any(
+        "\n" in quote_text[span_start:span_end]
+        for span_start, span_end in _iter_inline_code_spans(quote_text)
+    ):
+        # A code span crossing quote lines cannot be expressed by the
+        # single-line rich_text tokenizer; the whole quote region falls back
+        # to the markdown path (where Slack renders the span as code) —
+        # returning it line by line would let a later line re-promote alone.
+        return None, cursor
 
     block = _create_rich_text_block(
         [
@@ -2305,7 +2453,13 @@ def _consume_fenced_code_block(
 
 def _consume_rich_markdown_block(
     lines: list[str], index: int
-) -> tuple[dict[str, Any], int] | None:
+) -> tuple[dict[str, Any] | None, int] | None:
+    """Consume one promotable construct starting at ``index``.
+
+    Returns ``None`` when nothing was consumed, or ``(block, next_index)``.
+    ``block`` may be ``None`` when the construct was recognized but must stay
+    on the markdown path as a whole region (the caller buffers the raw
+    lines)."""
     if not lines[index].strip():
         return None
 
@@ -2367,9 +2521,21 @@ def _convert_markdown_text_segment_to_blocks(
 
         consumed = _consume_rich_markdown_block(lines, cursor)
         if consumed:
+            block, next_cursor = consumed
+            if block is None or _block_text_size(block) > _MESSAGE_BLOCKS_TEXT_TARGET:
+                # The region was recognized but must not post as one promoted
+                # block: either the consumer flagged it markdown-only (e.g. a
+                # quote whose code span crosses lines), or it is oversized —
+                # a promoted block posts as-is with no splitting machinery,
+                # so one oversized rich_text would fail the whole message
+                # with ``msg_blocks_too_long``. Keep the raw lines in the
+                # markdown buffer, whose splitter handles any size.
+                markdown_buffer.extend(lines[cursor:next_cursor])
+                cursor = next_cursor
+                continue
             flush_markdown_buffer()
-            block, cursor = consumed
             blocks.append(block)
+            cursor = next_cursor
             while cursor < len(lines) and not lines[cursor].strip():
                 cursor += 1
             continue
@@ -2659,6 +2825,9 @@ def _blocks_to_downgrade_parts(
             parts.append(getattr(block, "_plain_text", None) or "---")
         elif not fallback:
             text = block.get("text", "")
+            if isinstance(text, dict):
+                # e.g. a ``section`` block carries ``text: {type, text}``.
+                text = text.get("text", "")
             if text:
                 parts.append(str(text))
 

@@ -203,6 +203,242 @@ def test_unclosed_fence_split_reopens_fence_in_continuation() -> None:
     assert all(block["text"].startswith("```python") for block in blocks[1:])
 
 
+def test_oversized_closed_fence_falls_back_to_split_markdown_blocks() -> None:
+    # A closed fence whose content exceeds the per-message text budget must
+    # not become one giant rich_text block — Slack would reject the whole
+    # message with msg_blocks_too_long. It falls back to the markdown path,
+    # which splits it and reopens the fence in each continuation.
+    code_lines = [f"log line {index} " + "x" * 40 for index in range(400)]
+    raw = "```text\n" + "\n".join(code_lines) + "\n```"
+    assert len(raw) > 13200
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) > 1
+    assert all(block["type"] == "markdown" for block in blocks)
+    assert all(len(block["text"]) <= 12000 for block in blocks)
+    for message in convert_markdown_to_slack_messages(raw):
+        assert sum(_block_text_size(block) for block in message) <= 13200
+    rebuilt_code_lines = [
+        line
+        for block in blocks
+        for line in block["text"].split("\n")
+        if not line.startswith("```")
+    ]
+    assert rebuilt_code_lines == code_lines
+
+
+def test_demoted_fence_with_single_long_line_emits_no_delimiter_only_block() -> None:
+    # Codex review on #66: splitting a demoted fence whose body is one long
+    # line used to emit a leading block containing only the opening ``` —
+    # a visible stray empty code block.
+    raw = "```\n" + "x" * 16000 + "\n```"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert all(block["type"] == "markdown" for block in blocks)
+    assert all(block["text"].strip("`\n") for block in blocks)
+    rebuilt_body = "".join(
+        line
+        for block in blocks
+        for line in block["text"].split("\n")
+        if not line.startswith("```")
+    )
+    assert rebuilt_body == "x" * 16000
+
+
+def test_zwsp_not_inserted_inside_multiline_code_span() -> None:
+    # Codex review on #66 (round 2): the ZWSP emphasis stage must protect
+    # paragraph-bounded code spans too, or copied code samples carry U+200B.
+    text = "これは ` foo\n**value**、 ` です"
+    assert add_zero_width_spaces_to_markdown(text) == text
+
+
+def test_quote_with_multiline_code_span_stays_on_markdown_path() -> None:
+    # Codex review on #66 (round 2): the rich_text tokenizer only understands
+    # single-line code tokens, so a quote whose code span crosses quote lines
+    # is left to the markdown path, where Slack renders the span as code.
+    raw = "> `foo\n> bar` end"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert all(block["type"] == "markdown" for block in blocks)
+    assert "> `foo\n> bar` end" in blocks[0]["text"]
+
+
+def test_quote_with_single_line_code_span_still_promotes() -> None:
+    raw = "> use `foo` here"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert blocks[0]["type"] == "rich_text"
+    assert blocks[0]["elements"][0]["type"] == "rich_text_quote"
+
+
+def test_glued_heading_with_mismatched_first_cell_words_stays_markdown() -> None:
+    # Documented tradeoff (Codex #66 round 2): this input is formally
+    # indistinguishable from a pipe-carrying heading followed by pipe prose
+    # ("## Phase 1 | Overview" + "Use A | B in text" has the identical
+    # token/word shape), so the parser prefers not fabricating a table out
+    # of a heading; the text still renders readably on the markdown path.
+    raw = "### Report Status | Owner\nIn progress | Alice"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert all(block.get("type") == "markdown" for block in blocks)
+    assert "### Report Status | Owner" in blocks[0]["text"]
+
+
+def test_atx_looking_row_inside_active_table_is_kept() -> None:
+    # Codex review on #66 (round 3): the heading escape applies only when a
+    # heading would *start* a candidate run; inside an active table buffer a
+    # '#'-leading line is a data row and must stay in the table.
+    raw = "Name | Status\n--- | ---\n# Important | Done"
+
+    table = _first_table(convert_markdown_to_slack_blocks(raw))
+
+    assert [extract_plain_text_from_table_cell(cell) for cell in table["rows"][1]] == [
+        "# Important",
+        "Done",
+    ]
+
+
+def test_demoted_fence_split_attaches_closing_delimiter() -> None:
+    # Codex review on #66 (round 3): the closing delimiter must never form a
+    # delimiter-only piece; it rides along even slightly over the packing
+    # target (well within the hard-limit headroom).
+    raw = "```\n" + "y" * 11493 + "\n" + "z" * 11493 + "\n```"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert all(block["type"] == "markdown" for block in blocks)
+    assert all(len(block["text"]) <= 12000 for block in blocks)
+    assert all(block["text"].strip("`\n") for block in blocks)
+    rebuilt_body = [
+        line
+        for block in blocks
+        for line in block["text"].split("\n")
+        if not line.startswith("```")
+    ]
+    assert rebuilt_body == ["y" * 11493, "z" * 11493]
+
+
+def test_oversized_single_line_quote_keeps_quote_markers() -> None:
+    # Codex review on #66 (round 3): splitting "> " + one huge unbroken line
+    # used to emit a first block containing only ">" and unmarked
+    # continuations; every part now carries the quote marker.
+    raw = "> " + "あ" * 13000
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert all(block["type"] == "markdown" for block in blocks)
+    quote_lines = [line for block in blocks for line in block["text"].split("\n")]
+    assert all(line.startswith("> ") and len(line) > 2 for line in quote_lines)
+    assert "".join(line[2:] for line in quote_lines) == "あ" * 13000
+
+
+def test_oversized_single_line_list_item_keeps_marker_with_content() -> None:
+    raw = "- " + "い" * 13000
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    all_lines = [line for block in blocks for line in block["text"].split("\n")]
+    assert all_lines[0].startswith("- い")
+    # Continuations are unmarked lazy continuations, never a bare marker.
+    assert all(line.strip() not in {"-", ">"} for line in all_lines)
+    assert "".join(line.removeprefix("- ") for line in all_lines) == "い" * 13000
+
+
+def test_split_fenced_line_starting_with_quote_marker_stays_verbatim() -> None:
+    # Codex review on #66 (round 4): marker awareness applies to prose only —
+    # a fenced code line starting with "> " is code, and continuations must
+    # not gain a synthetic quote marker.
+    raw = "```\n> " + "c" * 13000 + "\n```"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) > 1
+    rebuilt_body = "".join(
+        line
+        for block in blocks
+        for line in block["text"].split("\n")
+        if not line.startswith("```")
+    )
+    assert rebuilt_body == "> " + "c" * 13000
+
+
+def test_atx_looking_header_row_before_separator_seeds_table() -> None:
+    # Codex review on #66 (round 4): an explicit separator on the next line
+    # proves a table context, so a header row whose first cell begins with
+    # '#' seeds the buffer instead of escaping as a heading.
+    raw = "# Important | Count\n--- | ---\nfoo | 1"
+
+    table = _first_table(convert_markdown_to_slack_blocks(raw))
+
+    headers = [extract_plain_text_from_table_cell(cell) for cell in table["rows"][0]]
+    assert headers == ["# Important", "Count"]
+    assert [extract_plain_text_from_table_cell(cell) for cell in table["rows"][1]] == [
+        "foo",
+        "1",
+    ]
+
+
+def test_unmatched_backtick_run_does_not_break_later_span_url() -> None:
+    # Codex review on #66 (round 4): a backtick run that opens no span is
+    # skipped whole (matching the span model); restarting inside it used to
+    # open a fake span and wrap the URL inside the later real code span.
+    converted = normalize_bare_urls_for_slack_markdown(
+        "`` stray opener\n`https://example.com` を参照"
+    )
+
+    assert "<https://example.com>" not in converted
+
+
+def test_underscore_inside_multiline_code_span_is_preserved() -> None:
+    # Codex review on #66: the paragraph-bounded span model applies to
+    # underscore normalization too — Slack renders the span as code, where a
+    # rewritten *value* would be visible corruption.
+    text = "設定は ` _value_\nfoo ` を参照"
+    assert normalize_underscore_emphasis(text) == text
+
+    prose_after_span = "` a\nb ` と _emph_ です"
+    assert normalize_underscore_emphasis(prose_after_span) == "` a\nb ` と *emph* です"
+
+
+def test_oversized_quote_falls_back_to_split_markdown_blocks() -> None:
+    raw = "\n".join("> 引用テキスト" + "あ" * 100 for _ in range(150))
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) > 1
+    assert all(block["type"] == "markdown" for block in blocks)
+    for message in convert_markdown_to_slack_messages(raw):
+        assert sum(_block_text_size(block) for block in message) <= 13200
+
+
+def test_oversized_list_falls_back_to_split_markdown_blocks() -> None:
+    raw = "\n".join(f"- 項目{index} " + "い" * 100 for index in range(150))
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) > 1
+    assert all(block["type"] == "markdown" for block in blocks)
+    for message in convert_markdown_to_slack_messages(raw):
+        assert sum(_block_text_size(block) for block in message) <= 13200
+
+
+def test_fence_quote_and_list_under_budget_still_promote() -> None:
+    raw = "```python\nprint(1)\n```\n\n> 引用\n\n- 項目"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert [block["type"] for block in blocks] == [
+        "rich_text",
+        "rich_text",
+        "rich_text",
+    ]
+
+
 def test_long_document_split_respects_preserve_visual_blank_lines() -> None:
     raw = "\n\n".join(
         f"paragraph {index} with enough text to need splitting\n\ncontinued"
@@ -371,6 +607,40 @@ value A | value B
     table = _first_table(blocks)
     headers = [extract_plain_text_from_table_cell(cell) for cell in table["rows"][0]]
     assert headers == ["Header A", "Header B"]
+
+
+def test_heading_with_pipe_not_followed_by_table_stays_intact() -> None:
+    # The glued-header split only applies when a table actually follows. A
+    # heading that merely contains a pipe must survive verbatim instead of
+    # being torn into a bogus heading + orphan "|1|Overview|" line.
+    raw = "## Phase 1 | Overview\n\n本文です。"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert all(block.get("type") == "markdown" for block in blocks)
+    assert "## Phase 1 | Overview" in blocks[0]["text"]
+
+
+def test_heading_with_pipe_at_end_of_document_stays_intact() -> None:
+    raw = "## Results Before | After"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) == 1
+    assert blocks[0]["type"] == "markdown"
+    assert blocks[0]["text"] == "## Results Before | After"
+
+
+def test_heading_with_pipe_followed_by_pipe_prose_stays_intact() -> None:
+    # Codex review on #66: a pipe-carrying next line is not enough — when the
+    # heading tail cannot supply a first cell shaped like that line's first
+    # cell, this is prose, not a glued table header.
+    raw = "## Phase 1 | Overview\nUse A | B in text"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert all(block.get("type") != "table" for block in blocks)
+    assert "## Phase 1 | Overview" in blocks[0]["text"]
 
 
 def test_empty_table_cell_is_filled_with_dash() -> None:
@@ -1154,6 +1424,17 @@ def test_dangling_bold_opener_keeps_following_span_bold() -> None:
     assert converted == "**oops ** and **70.9%→83.0%\u200b**、"
 
 
+def test_emphasis_markers_do_not_pair_across_blank_lines() -> None:
+    # CommonMark emphasis never spans paragraphs: a stray marker in one
+    # paragraph must not pair with a stray marker in a later paragraph and
+    # get ZWSP-padded as though it were one span.
+    text = "重みは*0.5。\n\n値は3.2*です"
+    assert add_zero_width_spaces_to_markdown(text) == text
+
+    text_bold = "係数は**0.5。\n\n上限は3.2**です"
+    assert add_zero_width_spaces_to_markdown(text_bold) == text_bold
+
+
 def test_blocks_to_plain_text_and_fallback_generation() -> None:
     raw = """# Title
 
@@ -1169,6 +1450,14 @@ def test_blocks_to_plain_text_and_fallback_generation() -> None:
     assert "Title" in plain
     assert "Name | Score" in plain
     assert "UserA | 100" in fallback
+
+
+def test_blocks_to_plain_text_reads_section_text_object() -> None:
+    # A foreign ``section`` block carries ``text`` as an object, not a string;
+    # the plain-text view must surface the inner text, not ``str(dict)``.
+    section = {"type": "section", "text": {"type": "mrkdwn", "text": "hello"}}
+
+    assert blocks_to_plain_text([section]) == "hello"
 
 
 def test_decode_html_entities() -> None:
@@ -1221,20 +1510,38 @@ def test_inline_code_preserves_html_tags_and_entities() -> None:
     assert blocks[0]["text"] == "A > B with `<div>` and `&amp;` and ＜foo＞ tag."
 
 
-def test_stray_backticks_across_lines_do_not_suppress_sanitization() -> None:
-    raw = "tick ` here\nProse &gt; and <foo> stay sanitized\nanother ` tick"
+def test_backticks_across_soft_breaks_protect_span_from_sanitization() -> None:
+    # Slack pairs backticks across soft line breaks and renders the stretch
+    # as inline code (verified in a real workspace, 2026-07-05), so the
+    # sanitizer must leave that span verbatim — rewriting it would visibly
+    # corrupt the rendered code.
+    raw = "tick ` here\nProse &gt; and <foo> stay verbatim\nanother ` tick"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert "Prose &gt; and <foo> stay verbatim" in blocks[0]["text"]
+
+
+def test_stray_backticks_across_paragraphs_do_not_suppress_sanitization() -> None:
+    # A code span never crosses a blank line, so one stray backtick cannot
+    # suppress sanitization beyond its own paragraph.
+    raw = "tick ` here\n\nProse &gt; and <foo> stay sanitized\n\nanother ` tick"
 
     blocks = convert_markdown_to_slack_blocks(raw)
 
     assert "Prose > and ＜foo＞ stay sanitized" in blocks[0]["text"]
 
 
-def test_same_line_inline_code_still_protected_with_stray_backtick_nearby() -> None:
+def test_stray_backtick_pairs_forward_matching_slack_rendering() -> None:
+    # CommonMark (and Slack) pair the first backtick with the next same-length
+    # run: the stray opener captures " tick\nuse " as the code span, so the
+    # <div> after it sits outside any span and is neutralized.
     raw = "stray ` tick\nuse `<div>` here"
 
     blocks = convert_markdown_to_slack_blocks(raw)
 
-    assert "`<div>`" in blocks[0]["text"]
+    assert "` tick\nuse `" in blocks[0]["text"]
+    assert "＜div＞" in blocks[0]["text"]
 
 
 def test_lone_backtick_does_not_pair_with_longer_backtick_run() -> None:
@@ -1333,6 +1640,49 @@ def test_normalize_bare_urls_preserves_markdown_links_and_code_spans() -> None:
 
     assert "[Example](https://example.com/docs)" in converted
     assert "`https://example.com/code`" in converted
+
+
+def test_code_span_across_soft_break_keeps_url_unwrapped() -> None:
+    # Slack pairs backticks across a soft line break within one paragraph and
+    # renders the stretch as inline code (verified in a real workspace,
+    # 2026-07-05); wrapping the URL would show a literal <…> inside that code
+    # span. The span is respected and the URL left bare.
+    converted = normalize_bare_urls_for_slack_markdown(
+        "これは ` 迷子の記号です\nhttps://example.com を見てください\nそして ` もう一つ"
+    )
+
+    assert "<https://example.com>" not in converted
+
+
+def test_stray_backticks_in_different_paragraphs_do_not_block_url_autolink() -> None:
+    # A code span never crosses a blank line, so backticks in different
+    # paragraphs stay literal and the URL between them is autolinked.
+    converted = normalize_bare_urls_for_slack_markdown(
+        "これは ` 迷子です\n\nhttps://example.com を見てください\n\nそして ` もう一つ"
+    )
+
+    assert "<https://example.com>" in converted
+
+
+def test_crlf_blank_lines_still_bound_code_spans_and_emphasis() -> None:
+    # Paragraph boundaries written as CRLF blank lines (\r\n\r\n) must bound
+    # code spans and emphasis pairing exactly like LF blank lines.
+    crlf_paragraphs = "tick ` here\r\n\r\n<foo> gets sanitized\r\n\r\nanother ` tick"
+    assert "＜foo＞" in sanitize_slack_text(crlf_paragraphs)
+
+    crlf_emphasis = "重みは*0.5。\r\n\r\n値は3.2*です"
+    assert add_zero_width_spaces_to_markdown(crlf_emphasis) == crlf_emphasis
+
+
+def test_sanitize_keeps_angle_token_in_code_span_across_soft_break() -> None:
+    # The same paragraph-bounded span model applies to sanitization: an
+    # invalid angle token inside a soft-break-crossing code span reaches
+    # Slack verbatim because Slack renders that stretch as code.
+    text = "設定は ` <div>\nfoo ` を参照"
+    assert sanitize_slack_text(text) == text
+
+    across_paragraphs = "これは ` 迷子です\n\n<div> タグ\n\nそして ` もう一つ"
+    assert "＜div＞" in sanitize_slack_text(across_paragraphs)
 
 
 def test_fallback_unwraps_inserted_bare_url_autolinks() -> None:

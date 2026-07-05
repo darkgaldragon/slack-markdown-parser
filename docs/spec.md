@@ -73,16 +73,18 @@ Slack still controls when those newer features appear and how they look, so trea
 ### Things this parser corrects or stabilizes
 
 - `_..._` and `__...__` are normalized into Slack-friendly `*...*` and `**...**`
-- Bare URLs are wrapped into Slack-friendly `<https://...>` form before `markdown` block delivery. The URL is trimmed to its real extent first (GFM-style): it stops at a doubled emphasis run (`**`/`~~`), at code/angle/pipe markers (`` ` ``, `<`, `>`, `|`), and at CJK / full-width punctuation (`、` `。` `」` `）` `！` …); trailing punctuation (GFM's autolink set `! ? . , : * _ ~`, and an unbalanced `)`) is excluded — `;` and quotes are kept because they are URL-legal. A lone `*` (URL wildcards/queries) and CJK *letters* — including iteration marks like `々` (IRIs / Unicode IDN hosts such as `https://ja.wikipedia.org/wiki/人々`) — are preserved. This keeps a scheme URL glued directly to following CJK text — common in Japanese, where no space separates them — from greedily swallowing the rest of the line (including a closing `**`) into the autolink.
+- Bare URLs are wrapped into Slack-friendly `<https://...>` form before `markdown` block delivery. The URL is trimmed to its real extent first (GFM-style): it stops at a doubled emphasis run (`**`/`~~`), at code/angle/pipe markers (`` ` ``, `<`, `>`, `|`), and at CJK / full-width punctuation (`、` `。` `」` `）` `！` …); trailing punctuation (GFM's autolink set `! ? . , : * _ ~`, and an unbalanced `)`) is excluded — `;` and quotes are kept because they are URL-legal. A lone `*` (URL wildcards/queries) and CJK *letters* — including iteration marks like `々` (IRIs / Unicode IDN hosts such as `https://ja.wikipedia.org/wiki/人々`) — are preserved. This keeps a scheme URL glued directly to following CJK text — common in Japanese, where no space separates them — from greedily swallowing the rest of the line (including a closing `**`) into the autolink. A URL inside an inline code span (paragraph-bounded; see the cleanup rules) stays bare: Slack renders that stretch as code, where a `<…>` wrapper would show literally.
 - Malformed Markdown tables are repaired before `table` block generation
 - Unambiguous standalone Markdown constructs are promoted into native Slack blocks:
   - standalone image syntax `![alt](https://...)` to `image`
   - thematic-break lines to `divider`
   - fenced code blocks to `rich_text_preformatted`
   - simple one-level quotes to `rich_text_quote`
+    - A quote whose inline code span crosses quote lines is not promoted: the single-line `rich_text` tokenizer cannot express such a span, while the markdown path renders it as code.
   - simple bullet and ordered lists to `rich_text_list`
     - Lists are promoted only when the list starts at the beginning of the text region or after a blank line, each non-blank line in the run is a list item, the list does not use ambiguous 1-3-space nested indentation, the item text does not rely on Markdown backslash escapes, and the run is not followed by an indented continuation paragraph.
     - Slack mention tokens inside a promoted list item are converted to their structured `rich_text` elements — `<@U…>`/`<@W…>` to `user`, `<#C…>`/`<#G…>` to `channel`, `<!subteam^S…>` to `usergroup`, and `<!here>`/`<!channel>`/`<!everyone>` to `broadcast` — since a `rich_text` block does not resolve a raw token. An optional `|label` display suffix is dropped (Slack renders the element from the id).
+  - A fence, quote, or list whose text would exceed the per-message total-text packing target (12,800 characters; see "Markdown block size splitting") is not promoted: a promoted block posts as-is, so one oversized `rich_text` block would fail the whole message with `msg_blocks_too_long`. Its raw lines stay in the `markdown` path instead, whose splitter handles any size.
 - Table-like rows inside fenced code blocks are kept out of table parsing
 - Internal blank lines can optionally be rewritten into placeholder lines so Slack keeps visible paragraph separation
 - Unsupported Slack angle-bracket tokens such as `<foo>` or raw HTML-like tags are neutralized in prose, while fenced code blocks and inline code spans keep them verbatim
@@ -98,7 +100,7 @@ Behavior of `sanitize_slack_text`:
 - Replace unsupported angle-bracket tokens such as `<foo>` with full-width brackets (`＜foo＞`) so Slack does not interpret them as malformed special syntax
 - This also applies to raw HTML-like tags such as `<div>` or `<span>`
 - Angle-token neutralization applies only outside fenced code blocks and inline code spans, so code samples such as `` `<div>` `` reach Slack verbatim; ANSI/control/marker removal applies everywhere because those characters are never legitimate content
-- For this purpose an inline code span is recognized within a single line only, and it closes only on a backtick run of the same length as the opener. A stray unpaired backtick therefore stays literal and cannot suppress sanitization of later lines, and an invalid angle token that spans a code span (`<foo `bar` baz>`) is still neutralized as a whole while the span content stays verbatim
+- For this purpose an inline code span closes only on a backtick run of the same length as the opener, may cross soft line breaks, but never crosses a blank line. This matches measured Slack rendering (2026-07-05): Slack pairs backticks across soft line breaks within a paragraph and renders the stretch as inline code, so rewriting that content would visibly corrupt code. A stray unpaired backtick therefore cannot suppress sanitization beyond its own paragraph, and an invalid angle token that spans a code span (`<foo `bar` baz>`) is still neutralized as a whole while the span content stays verbatim
 
 ## Underscore emphasis normalization rules
 
@@ -109,7 +111,7 @@ Behavior of `normalize_underscore_emphasis`:
 - Only convert emphasis-style underscores that are not embedded inside ASCII alphanumeric identifiers
 - Preserve identifiers such as `snake_case`
 - Preserve escaped forms such as `\_escaped\_`
-- Preserve underscores inside bare URLs, Markdown links, Slack `<...>` forms, and inline code
+- Preserve underscores inside bare URLs, Markdown links, Slack `<...>` forms, and inline code (paragraph-bounded spans, as in the cleanup rules)
 - Preserve underscores inside fenced code blocks (both `` ``` `` and `~~~`)
 
 ## Table normalization rules
@@ -129,8 +131,8 @@ LLMs often emit tables with omitted outer pipes, missing separator rows, or inco
 - If the separator row is missing, generate one immediately after the header row
 - Match each row to the header width by filling missing cells with empty cells and truncating extra cells
 - Replace empty cells with `-` when generating the Slack `table` block
-- Split `# Heading |a|b|`-style lines into a heading line and a table row. Pipes inside inline code in the heading are ignored for this detection.
-- When a heading and a header row collapse into one line, such as `### Heading ... Header A | Header B`, use the next row shape as a hint to keep the first header cell as a multi-word phrase when possible.
+- Split `# Heading |a|b|`-style lines into a heading line and a table row, but only when the next line also carries a pipe (a table-like row): the split targets a table header glued onto a heading, so a heading that merely contains a pipe (`## Phase 1 | Overview`) is left intact. Pipes inside inline code in the heading are ignored for this detection.
+- When a heading and a header row collapse into one line, such as `### Heading ... Header A | Header B`, use the next row shape as a hint to keep the first header cell as a multi-word phrase when possible. The split is rejected when the heading tail cannot supply a first cell with the same word count as the reference cell (`## Phase 1 | Overview` followed by pipe-carrying prose stays a heading), and a heading line whose split is rejected is never buffered as a table data row. This is a deliberate precision/recall tradeoff: a glued header whose first data cell carries more words than the heading tail can supply (`### Report Status | Owner` over `In progress | Alice`) is formally indistinguishable from the prose case and stays markdown text rather than risking a fabricated table.
 - Ignore lines inside fenced code blocks (both `` ``` `` and `~~~`) when collecting table candidates.
 
 ### Preserving literal pipes inside cells
@@ -184,6 +186,7 @@ Rules:
 - When an outer edge is tight against surrounding non-boundary text, only that edge is padded with a zero-width space. The safe (boundary) edge is left clean.
 - When an emphasis marker (`**`, `*`, `~~`) sits directly against punctuation on its inner side (for example `**注意:**` or `**70.9%→83.0%**`), a zero-width space is inserted just *inside* the marker. This makes the marker's inner neighbor a non-punctuation character, so Slack's CommonMark right-/left-flanking check succeeds regardless of what surrounds the token — including before CJK text and CJK punctuation (`、` / `。`), which Slack does not accept as a flanking neighbor. Inline code spans are exempt from this rule because they do not obey flanking rules.
 - Emphasis delimiters are recognized only when they satisfy CommonMark's minimal flanking rule: an opening run is not immediately followed by whitespace, and a closing run is not immediately preceded by whitespace. A stray, whitespace-flanked marker (for example the literal `**` in `閉じ ** が`), or an otherwise unbalanced marker, is left untouched. This prevents one dangling marker from shifting the pairing of nearby well-formed spans and misplacing their zero-width spaces.
+- Emphasis markers never pair across a blank line (CommonMark emphasis cannot span paragraphs), so stray markers in different paragraphs stay literal and receive no zero-width spaces.
 
 Exception:
 
@@ -193,6 +196,7 @@ Exception:
 
 - Fenced code blocks (both `` ``` ... ``` `` and `~~~ ... ~~~`) are never modified
 - Inline code (`` `...` ``) is not excluded; it is part of the target set above
+- Inline code spans follow the paragraph-bounded span model, so a span crossing a soft line break is protected as one token and never receives internal zero-width spaces
 - Inline code nested inside `**bold**`, `*italic*`, or `~~strike~~` is left untouched
 - For English-like boundaries around those nested combinations, the outer formatting span is preserved as-is
 - For dense Japanese and Chinese boundaries, visible spaces are inserted on the missing outer side or sides around the outer formatting span
@@ -234,6 +238,10 @@ Long or heading-dense non-table regions are therefore split before delivery:
 - Each piece is re-checked after formatting; when it still exceeds a hard limit, the packing budgets shrink and the piece is split again
 - `convert_markdown_to_slack_messages` additionally packs blocks into messages so that the summed expansion estimate stays within the 50-item budget (non-`markdown` blocks count as one item each) and the summed block text stays within the 13,200-character per-message total
 - The top-level fallback `text` field is not subject to the character limit (Slack truncates it instead of rejecting), so preview text is left whole
+
+## Known limitations
+
+- The line-oriented block machinery — rich-block promotion, table segmentation, and intra-paragraph splitting — is not aware of inline code spans that cross soft line breaks. A block-syntax line (image, table row, fence) sitting inside such a span can still be promoted to a real block, and a split of an over-budget paragraph can cut such a span apart, leaving unmatched backticks. The content-rewriting stages (decode, sanitize, URL, underscore, zero-width spaces) do respect these spans. Multi-line single-backtick spans wrapping block-like content are rare in practice — multi-line code is normally fenced — and span-aware line consumption is planned as follow-up work.
 
 ## Optional blank-line visibility workaround
 
