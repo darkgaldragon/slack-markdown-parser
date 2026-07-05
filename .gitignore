@@ -43,6 +43,7 @@ AGENTS.md
 CLAUDE.md
 .DS_Store
 Thumbs.db
+.claude
 
 # Local research / ad-hoc outputs
 output/
