@@ -3,9 +3,10 @@
 This module orchestrates the conversion of LLM-generated Markdown text into
 Slack Block Kit blocks. The implementation lives in focused internal modules
 (``_sanitize``, ``_emphasis``, ``_tables``, ``_rich_blocks``, ``_splitting``,
-...); every name that was historically importable from
-``slack_markdown_parser.converter`` is re-exported here so existing imports
-keep working."""
+...); every name previously defined in this module — public and private — is
+re-exported here so existing ``slack_markdown_parser.converter`` imports keep
+working. (Incidental stdlib passthroughs such as ``re`` or ``html``, which were
+never part of this module's surface, are not preserved.)"""
 
 from __future__ import annotations
 
