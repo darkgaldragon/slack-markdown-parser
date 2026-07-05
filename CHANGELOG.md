@@ -6,6 +6,21 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-07-05
+
+### Added
+
+- Made the line-oriented block machinery aware of inline code spans that cross soft line breaks. Slack pairs backticks across soft line breaks within a paragraph and renders the whole stretch as one inline code span (verified against a real workspace on 2026-07-05), but rich-block promotion, table segmentation/normalization, and the intra-paragraph splitter previously read those lines as structure. A new `_multiline_code_span_line_map` helper exposes the paragraph-bounded span model (single source of truth: `_iter_inline_code_spans`) as per-line flags, computed per non-fenced chunk. A block-syntax line — image, divider, quote/list marker, or pipe row — inside such a span now stays literal markdown text instead of being promoted into a real block, table detection skips those lines, and the splitter keeps a span-crossing line boundary glued within a size valve (packing target + 512 characters, capped below the 12,000 hard block limit) so no piece is left with unmatched backticks. A span larger than the valve is still cut, never at the cost of the hard limit; a fence delimiter still terminates a span (block structure binds before inline code, as in CommonMark).
+
+### Fixed
+
+- Stopped oversized promoted blocks from failing delivery. A closed fenced code block, blockquote, or list whose text exceeds the measured per-message total (12,800-character packing target) was promoted into a single `rich_text` block, which — unlike `markdown` blocks — has no splitting machinery, so one oversized block failed the whole `chat.postMessage` with `msg_blocks_too_long` (reproduced: a 16,689-character preformatted block was rejected). Such content now stays on the `markdown` path, whose splitter handles any size; under-budget promotions are unchanged.
+- Stopped tearing apart headings that merely contain a pipe. The glued-header split (`# Heading |a|b|`) now fires only when the next line is itself table-like and the heading tail can supply a first cell matching the reference row's shape, so `## Phase 1 | Overview` stays one heading instead of becoming a bogus `## Phase` heading plus an orphan `|1|Overview|` row. A heading whose split is rejected is no longer buffered as a table data row either. An ATX-looking header row directly above an explicit separator (`# Important | Count` over `--- | ---`) is still recognized as a real table header.
+- Bounded inline code spans at paragraphs, not lines, throughout sanitize/decode, bare-URL normalization, underscore normalization, and the zero-width-space stage. The previous single-line span model rewrote content inside a soft-break-crossing span — a bare URL gained an autolink `<…>` that showed literally in the rendered code, an angle token was neutralized to full-width brackets, an emphasis marker got an internal zero-width space, and `_value_` became `*value*` — all visible corruption of what Slack renders as code. Spans now close on an equal-length backtick run, may cross soft line breaks, and never cross a blank line, matching Slack's pairing. A quote whose code span crosses quote lines is left on the markdown path (the single-line `rich_text` tokenizer cannot express it).
+- Stopped emphasis markers from pairing across a blank line. CommonMark emphasis cannot span paragraphs, so a stray `*`/`**`/`~~` in one paragraph no longer pairs with a stray marker in a later paragraph and mis-places zero-width spaces. CRLF blank lines (`\r\n\r\n`) are recognized as paragraph boundaries alongside LF.
+- Fixed several splitter edge cases surfaced during review: a demoted fenced code block no longer emits a leading or trailing piece containing only the fence delimiter; a fenced code line is split verbatim (the prose splitter dropped a boundary space and could inject a quote/list marker into code); an overlong prose line never splits a leading quote/list marker onto its own line, and quote continuations keep their `> ` marker; and the bare-URL scanner skips an unmatched backtick run whole instead of opening a fake shorter-delimiter span that wrapped a later span's URL.
+- Made `blocks_to_plain_text` read a `section`-style `text` object instead of emitting `str(dict)` for foreign blocks passed in directly.
+
 ## [2.5.1] - 2026-06-11
 
 ### Fixed
