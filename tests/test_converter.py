@@ -1475,6 +1475,16 @@ def test_stray_backticks_in_different_paragraphs_do_not_block_url_autolink() -> 
     assert "<https://example.com>" in converted
 
 
+def test_crlf_blank_lines_still_bound_code_spans_and_emphasis() -> None:
+    # Paragraph boundaries written as CRLF blank lines (\r\n\r\n) must bound
+    # code spans and emphasis pairing exactly like LF blank lines.
+    crlf_paragraphs = "tick ` here\r\n\r\n<foo> gets sanitized\r\n\r\nanother ` tick"
+    assert "＜foo＞" in sanitize_slack_text(crlf_paragraphs)
+
+    crlf_emphasis = "重みは*0.5。\r\n\r\n値は3.2*です"
+    assert add_zero_width_spaces_to_markdown(crlf_emphasis) == crlf_emphasis
+
+
 def test_sanitize_keeps_angle_token_in_code_span_across_soft_break() -> None:
     # The same paragraph-bounded span model applies to sanitization: an
     # invalid angle token inside a soft-break-crossing code span reaches

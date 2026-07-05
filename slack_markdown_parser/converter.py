@@ -56,25 +56,26 @@ INLINE_CODE_SPAN_PATTERN = re.compile(r"(?<!`)`[^`\n]+`(?!`)", flags=re.DOTALL)
 # legitimately wrap ``**bold**`` and ``*`` is heavily overloaded, so it keeps the
 # whitespace guard only.)
 #
-# Every body additionally may not cross a blank line (``(?!\n[ \t]*\n)``):
-# CommonMark emphasis never spans paragraphs, so a stray ``*``/``**``/``~~`` in
-# one paragraph must not pair with a stray marker in a later paragraph and get
-# ZWSP-padded as though it were one span.
+# Every body additionally may not cross a blank line (``(?!\n[ \t\r]*\n)``,
+# CRLF included): CommonMark emphasis never spans paragraphs, so a stray
+# ``*``/``**``/``~~`` in one paragraph must not pair with a stray marker in a
+# later paragraph and get ZWSP-padded as though it were one span.
 EMPHASIS_PATTERNS = (
     re.compile(
-        r"(?<!\*)\*\*(?!\s)((?:(?!\*\*|\n[ \t]*\n).)+?)(?<!\s)\*\*(?!\*)",
+        r"(?<!\*)\*\*(?!\s)((?:(?!\*\*|\n[ \t\r]*\n).)+?)(?<!\s)\*\*(?!\*)",
         flags=re.DOTALL,
     ),
     re.compile(
-        r"(?<!\*)\*(?!\*)(?!\s)((?:(?!\n[ \t]*\n).)+?)(?<!\s)(?<!\*)\*(?!\*)",
+        r"(?<!\*)\*(?!\*)(?!\s)((?:(?!\n[ \t\r]*\n).)+?)(?<!\s)(?<!\*)\*(?!\*)",
         flags=re.DOTALL,
     ),
-    re.compile(r"~~(?!\s)((?:(?!~~|\n[ \t]*\n).)+?)(?<!\s)~~", flags=re.DOTALL),
+    re.compile(r"~~(?!\s)((?:(?!~~|\n[ \t\r]*\n).)+?)(?<!\s)~~", flags=re.DOTALL),
 )
 INLINE_CODE_PLACEHOLDER_PATTERN = re.compile(r"\ufff0code\d+\ufff1")
 # A blank line ends the paragraph, and with it any possible code span: Slack
-# pairs backticks across soft line breaks but never across paragraphs.
-_CODE_SPAN_BLANK_LINE_PATTERN = re.compile(r"\n[ \t]*\n")
+# pairs backticks across soft line breaks but never across paragraphs. The
+# ``\r`` in the class keeps CRLF blank lines (``\r\n\r\n``) recognized too.
+_CODE_SPAN_BLANK_LINE_PATTERN = re.compile(r"\n[ \t\r]*\n")
 PROTECTED_UNDERSCORE_SPAN_PATTERN = re.compile(
     r"`[^`\n]+`"
     r"|\[[^\]\n]+\]\([^\)\n]+\)"
@@ -675,7 +676,7 @@ def _transform_outside_inline_code(text: str, transform: Callable[[str], str]) -
     while cursor != -1:
         span_end = _find_inline_code_span_end(text, cursor)
         if span_end is None or _CODE_SPAN_BLANK_LINE_PATTERN.search(
-            text[cursor:span_end]
+            text, cursor, span_end
         ):
             # No same-paragraph closing run: the backticks are literal text.
             delimiter_end = cursor
@@ -806,7 +807,7 @@ def normalize_bare_urls_for_slack_markdown(text: str) -> str:
                 if (
                     code_span_end is not None
                     and not _CODE_SPAN_BLANK_LINE_PATTERN.search(
-                        chunk[cursor:code_span_end]
+                        chunk, cursor, code_span_end
                     )
                 ):
                     parts.append(chunk[cursor:code_span_end])
