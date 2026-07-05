@@ -40,7 +40,6 @@ STANDALONE_IMAGE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 MARKDOWN_LINK_PATTERN = re.compile(r"\[[^\]\n]+\]\([^\)\n]+\)")
-INLINE_CODE_SPAN_PATTERN = re.compile(r"(?<!`)`[^`\n]+`(?!`)", flags=re.DOTALL)
 # Emphasis delimiters must satisfy CommonMark's minimal flanking requirement:
 # an opening run is not followed by whitespace and a closing run is not preceded
 # by whitespace. Enforcing this keeps a stray, whitespace-flanked delimiter
@@ -648,16 +647,39 @@ def _find_inline_code_span_end(text: str, start: int) -> int | None:
         cursor = run_end
 
 
+def _iter_inline_code_spans(text: str) -> Iterator[tuple[int, int]]:
+    """Yield ``(start, end)`` for each inline code span in ``text``.
+
+    Single source of truth for the module's span model: a span closes only on
+    a backtick run of the *same* length as its opener, may cross soft line
+    breaks, and never crosses a blank line. This matches measured Slack
+    rendering (2026-07-05): Slack pairs backticks across soft line breaks
+    within a paragraph and renders the stretch as inline code, while
+    backticks in different paragraphs never pair — so the blank-line bound
+    keeps one stray backtick from affecting anything beyond its paragraph.
+    """
+    cursor = text.find("`")
+    while cursor != -1:
+        span_end = _find_inline_code_span_end(text, cursor)
+        if span_end is None or _CODE_SPAN_BLANK_LINE_PATTERN.search(
+            text, cursor, span_end
+        ):
+            # No same-paragraph closing run: the backticks are literal text.
+            delimiter_end = cursor
+            while delimiter_end < len(text) and text[delimiter_end] == "`":
+                delimiter_end += 1
+            cursor = text.find("`", delimiter_end)
+            continue
+        yield cursor, span_end
+        cursor = text.find("`", span_end)
+
+
 def _transform_outside_inline_code(text: str, transform: Callable[[str], str]) -> str:
     """Apply ``transform`` to text while keeping inline code spans verbatim.
 
-    Spans are bounded to a single paragraph: Slack pairs backticks across
-    soft line breaks (CommonMark treats line endings inside a code span as
-    spaces; verified against a real workspace, 2026-07-05), so such a span
-    must be respected — rewriting its content would visibly corrupt what
-    Slack renders as code. Backticks in different paragraphs never pair, so
-    the blank-line bound still keeps one stray backtick from suppressing
-    sanitization for the rest of the message.
+    Spans follow the module's paragraph-bounded span model
+    (``_iter_inline_code_spans``): rewriting a span's content would visibly
+    corrupt what Slack renders as code.
 
     Spans are replaced with placeholder tokens (which contain no backticks or
     angle brackets) rather than split out, so the transform still sees any
@@ -671,24 +693,12 @@ def _transform_outside_inline_code(text: str, transform: Callable[[str], str]) -
     spans: list[str] = []
     parts: list[str] = []
     plain_start = 0
-    cursor = text.find("`")
 
-    while cursor != -1:
-        span_end = _find_inline_code_span_end(text, cursor)
-        if span_end is None or _CODE_SPAN_BLANK_LINE_PATTERN.search(
-            text, cursor, span_end
-        ):
-            # No same-paragraph closing run: the backticks are literal text.
-            delimiter_end = cursor
-            while delimiter_end < len(text) and text[delimiter_end] == "`":
-                delimiter_end += 1
-            cursor = text.find("`", delimiter_end)
-            continue
-        parts.append(text[plain_start:cursor])
+    for start, end in _iter_inline_code_spans(text):
+        parts.append(text[plain_start:start])
         parts.append(f"\ufff0code{len(spans)}\ufff1")
-        spans.append(text[cursor:span_end])
-        plain_start = span_end
-        cursor = text.find("`", span_end)
+        spans.append(text[start:end])
+        plain_start = end
 
     parts.append(text[plain_start:])
     transformed = transform("".join(parts))
@@ -992,8 +1002,10 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, list[int]]:
     boundary_chars = {*VISIBLE_BOUNDARY_CHARS, ZWSP, SYNTH_SPACE_MARKER}
 
     def wrap_match(match: re.Match[str], source: str) -> str:
-        start, end = match.start(), match.end()
-        token = match.group(0)
+        return wrap_span(source, match.start(), match.end())
+
+    def wrap_span(source: str, start: int, end: int) -> str:
+        token = source[start:end]
         # The start/end of the chunk are effective boundaries: there is no
         # adjacent text to separate the marker from, so they are safe. Treating
         # them as unsafe used to append a ZWSP right after a closing marker, and
@@ -1141,15 +1153,15 @@ def _format_markdown_with_spacing_metadata(text: str) -> tuple[str, list[int]]:
         protected_parts: list[str] = []
         last_end = 0
 
-        for idx, match in enumerate(INLINE_CODE_SPAN_PATTERN.finditer(segment)):
+        for idx, (span_start, span_end) in enumerate(_iter_inline_code_spans(segment)):
             placeholder = f"\ufff0code{idx}\ufff1"
-            protected_parts.append(segment[last_end : match.start()])
+            protected_parts.append(segment[last_end:span_start])
             protected_parts.append(placeholder)
             placeholder_map[placeholder] = {
-                "raw": match.group(0),
-                "wrapped": wrap_match(match, segment),
+                "raw": segment[span_start:span_end],
+                "wrapped": wrap_span(segment, span_start, span_end),
             }
-            last_end = match.end()
+            last_end = span_end
 
         protected_parts.append(segment[last_end:])
         protected_segment = "".join(protected_parts)
@@ -2186,7 +2198,7 @@ def _quote_lines_are_simple(lines: list[str]) -> bool:
 
 def _consume_quote_block(
     lines: list[str], start: int
-) -> tuple[dict[str, Any], int] | None:
+) -> tuple[dict[str, Any] | None, int] | None:
     if _strip_quote_marker(lines[start]) is None:
         return None
 
@@ -2205,6 +2217,16 @@ def _consume_quote_block(
     quote_text = "\n".join(quote_lines).strip()
     if not quote_text:
         return None
+
+    if any(
+        "\n" in quote_text[span_start:span_end]
+        for span_start, span_end in _iter_inline_code_spans(quote_text)
+    ):
+        # A code span crossing quote lines cannot be expressed by the
+        # single-line rich_text tokenizer; the whole quote region falls back
+        # to the markdown path (where Slack renders the span as code) —
+        # returning it line by line would let a later line re-promote alone.
+        return None, cursor
 
     block = _create_rich_text_block(
         [
@@ -2364,7 +2386,13 @@ def _consume_fenced_code_block(
 
 def _consume_rich_markdown_block(
     lines: list[str], index: int
-) -> tuple[dict[str, Any], int] | None:
+) -> tuple[dict[str, Any] | None, int] | None:
+    """Consume one promotable construct starting at ``index``.
+
+    Returns ``None`` when nothing was consumed, or ``(block, next_index)``.
+    ``block`` may be ``None`` when the construct was recognized but must stay
+    on the markdown path as a whole region (the caller buffers the raw
+    lines)."""
     if not lines[index].strip():
         return None
 
@@ -2427,12 +2455,14 @@ def _convert_markdown_text_segment_to_blocks(
         consumed = _consume_rich_markdown_block(lines, cursor)
         if consumed:
             block, next_cursor = consumed
-            if _block_text_size(block) > _MESSAGE_BLOCKS_TEXT_TARGET:
-                # A promoted block posts as-is: unlike markdown blocks it has
-                # no splitting machinery, so one oversized rich_text (a huge
-                # fence, quote, or list) would fail the whole message with
-                # ``msg_blocks_too_long``. Keep the raw lines in the markdown
-                # buffer instead, whose splitter handles any size.
+            if block is None or _block_text_size(block) > _MESSAGE_BLOCKS_TEXT_TARGET:
+                # The region was recognized but must not post as one promoted
+                # block: either the consumer flagged it markdown-only (e.g. a
+                # quote whose code span crosses lines), or it is oversized —
+                # a promoted block posts as-is with no splitting machinery,
+                # so one oversized rich_text would fail the whole message
+                # with ``msg_blocks_too_long``. Keep the raw lines in the
+                # markdown buffer, whose splitter handles any size.
                 markdown_buffer.extend(lines[cursor:next_cursor])
                 cursor = next_cursor
                 continue

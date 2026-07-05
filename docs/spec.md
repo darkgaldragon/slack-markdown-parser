@@ -80,6 +80,7 @@ Slack still controls when those newer features appear and how they look, so trea
   - thematic-break lines to `divider`
   - fenced code blocks to `rich_text_preformatted`
   - simple one-level quotes to `rich_text_quote`
+    - A quote whose inline code span crosses quote lines is not promoted: the single-line `rich_text` tokenizer cannot express such a span, while the markdown path renders it as code.
   - simple bullet and ordered lists to `rich_text_list`
     - Lists are promoted only when the list starts at the beginning of the text region or after a blank line, each non-blank line in the run is a list item, the list does not use ambiguous 1-3-space nested indentation, the item text does not rely on Markdown backslash escapes, and the run is not followed by an indented continuation paragraph.
     - Slack mention tokens inside a promoted list item are converted to their structured `rich_text` elements — `<@U…>`/`<@W…>` to `user`, `<#C…>`/`<#G…>` to `channel`, `<!subteam^S…>` to `usergroup`, and `<!here>`/`<!channel>`/`<!everyone>` to `broadcast` — since a `rich_text` block does not resolve a raw token. An optional `|label` display suffix is dropped (Slack renders the element from the id).
@@ -131,7 +132,7 @@ LLMs often emit tables with omitted outer pipes, missing separator rows, or inco
 - Match each row to the header width by filling missing cells with empty cells and truncating extra cells
 - Replace empty cells with `-` when generating the Slack `table` block
 - Split `# Heading |a|b|`-style lines into a heading line and a table row, but only when the next line also carries a pipe (a table-like row): the split targets a table header glued onto a heading, so a heading that merely contains a pipe (`## Phase 1 | Overview`) is left intact. Pipes inside inline code in the heading are ignored for this detection.
-- When a heading and a header row collapse into one line, such as `### Heading ... Header A | Header B`, use the next row shape as a hint to keep the first header cell as a multi-word phrase when possible. The split is rejected when the heading tail cannot supply a first cell with the same word count as the reference cell (`## Phase 1 | Overview` followed by pipe-carrying prose stays a heading), and a heading line whose split is rejected is never buffered as a table data row.
+- When a heading and a header row collapse into one line, such as `### Heading ... Header A | Header B`, use the next row shape as a hint to keep the first header cell as a multi-word phrase when possible. The split is rejected when the heading tail cannot supply a first cell with the same word count as the reference cell (`## Phase 1 | Overview` followed by pipe-carrying prose stays a heading), and a heading line whose split is rejected is never buffered as a table data row. This is a deliberate precision/recall tradeoff: a glued header whose first data cell carries more words than the heading tail can supply (`### Report Status | Owner` over `In progress | Alice`) is formally indistinguishable from the prose case and stays markdown text rather than risking a fabricated table.
 - Ignore lines inside fenced code blocks (both `` ``` `` and `~~~`) when collecting table candidates.
 
 ### Preserving literal pipes inside cells
@@ -195,6 +196,7 @@ Exception:
 
 - Fenced code blocks (both `` ``` ... ``` `` and `~~~ ... ~~~`) are never modified
 - Inline code (`` `...` ``) is not excluded; it is part of the target set above
+- Inline code spans follow the paragraph-bounded span model, so a span crossing a soft line break is protected as one token and never receives internal zero-width spaces
 - Inline code nested inside `**bold**`, `*italic*`, or `~~strike~~` is left untouched
 - For English-like boundaries around those nested combinations, the outer formatting span is preserved as-is
 - For dense Japanese and Chinese boundaries, visible spaces are inserted on the missing outer side or sides around the outer formatting span

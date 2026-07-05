@@ -247,6 +247,48 @@ def test_demoted_fence_with_single_long_line_emits_no_delimiter_only_block() -> 
     assert rebuilt_body == "x" * 16000
 
 
+def test_zwsp_not_inserted_inside_multiline_code_span() -> None:
+    # Codex review on #66 (round 2): the ZWSP emphasis stage must protect
+    # paragraph-bounded code spans too, or copied code samples carry U+200B.
+    text = "これは ` foo\n**value**、 ` です"
+    assert add_zero_width_spaces_to_markdown(text) == text
+
+
+def test_quote_with_multiline_code_span_stays_on_markdown_path() -> None:
+    # Codex review on #66 (round 2): the rich_text tokenizer only understands
+    # single-line code tokens, so a quote whose code span crosses quote lines
+    # is left to the markdown path, where Slack renders the span as code.
+    raw = "> `foo\n> bar` end"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert all(block["type"] == "markdown" for block in blocks)
+    assert "> `foo\n> bar` end" in blocks[0]["text"]
+
+
+def test_quote_with_single_line_code_span_still_promotes() -> None:
+    raw = "> use `foo` here"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert blocks[0]["type"] == "rich_text"
+    assert blocks[0]["elements"][0]["type"] == "rich_text_quote"
+
+
+def test_glued_heading_with_mismatched_first_cell_words_stays_markdown() -> None:
+    # Documented tradeoff (Codex #66 round 2): this input is formally
+    # indistinguishable from a pipe-carrying heading followed by pipe prose
+    # ("## Phase 1 | Overview" + "Use A | B in text" has the identical
+    # token/word shape), so the parser prefers not fabricating a table out
+    # of a heading; the text still renders readably on the markdown path.
+    raw = "### Report Status | Owner\nIn progress | Alice"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert all(block.get("type") == "markdown" for block in blocks)
+    assert "### Report Status | Owner" in blocks[0]["text"]
+
+
 def test_underscore_inside_multiline_code_span_is_preserved() -> None:
     # Codex review on #66: the paragraph-bounded span model applies to
     # underscore normalization too — Slack renders the span as code, where a
