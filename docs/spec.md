@@ -110,7 +110,7 @@ Behavior of `normalize_underscore_emphasis`:
 - Only convert emphasis-style underscores that are not embedded inside ASCII alphanumeric identifiers
 - Preserve identifiers such as `snake_case`
 - Preserve escaped forms such as `\_escaped\_`
-- Preserve underscores inside bare URLs, Markdown links, Slack `<...>` forms, and inline code
+- Preserve underscores inside bare URLs, Markdown links, Slack `<...>` forms, and inline code (paragraph-bounded spans, as in the cleanup rules)
 - Preserve underscores inside fenced code blocks (both `` ``` `` and `~~~`)
 
 ## Table normalization rules
@@ -131,7 +131,7 @@ LLMs often emit tables with omitted outer pipes, missing separator rows, or inco
 - Match each row to the header width by filling missing cells with empty cells and truncating extra cells
 - Replace empty cells with `-` when generating the Slack `table` block
 - Split `# Heading |a|b|`-style lines into a heading line and a table row, but only when the next line also carries a pipe (a table-like row): the split targets a table header glued onto a heading, so a heading that merely contains a pipe (`## Phase 1 | Overview`) is left intact. Pipes inside inline code in the heading are ignored for this detection.
-- When a heading and a header row collapse into one line, such as `### Heading ... Header A | Header B`, use the next row shape as a hint to keep the first header cell as a multi-word phrase when possible.
+- When a heading and a header row collapse into one line, such as `### Heading ... Header A | Header B`, use the next row shape as a hint to keep the first header cell as a multi-word phrase when possible. The split is rejected when the heading tail cannot supply a first cell with the same word count as the reference cell (`## Phase 1 | Overview` followed by pipe-carrying prose stays a heading), and a heading line whose split is rejected is never buffered as a table data row.
 - Ignore lines inside fenced code blocks (both `` ``` `` and `~~~`) when collecting table candidates.
 
 ### Preserving literal pipes inside cells

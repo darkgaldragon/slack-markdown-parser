@@ -228,6 +228,36 @@ def test_oversized_closed_fence_falls_back_to_split_markdown_blocks() -> None:
     assert rebuilt_code_lines == code_lines
 
 
+def test_demoted_fence_with_single_long_line_emits_no_delimiter_only_block() -> None:
+    # Codex review on #66: splitting a demoted fence whose body is one long
+    # line used to emit a leading block containing only the opening ``` —
+    # a visible stray empty code block.
+    raw = "```\n" + "x" * 16000 + "\n```"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert all(block["type"] == "markdown" for block in blocks)
+    assert all(block["text"].strip("`\n") for block in blocks)
+    rebuilt_body = "".join(
+        line
+        for block in blocks
+        for line in block["text"].split("\n")
+        if not line.startswith("```")
+    )
+    assert rebuilt_body == "x" * 16000
+
+
+def test_underscore_inside_multiline_code_span_is_preserved() -> None:
+    # Codex review on #66: the paragraph-bounded span model applies to
+    # underscore normalization too — Slack renders the span as code, where a
+    # rewritten *value* would be visible corruption.
+    text = "設定は ` _value_\nfoo ` を参照"
+    assert normalize_underscore_emphasis(text) == text
+
+    prose_after_span = "` a\nb ` と _emph_ です"
+    assert normalize_underscore_emphasis(prose_after_span) == "` a\nb ` と *emph* です"
+
+
 def test_oversized_quote_falls_back_to_split_markdown_blocks() -> None:
     raw = "\n".join("> 引用テキスト" + "あ" * 100 for _ in range(150))
 
@@ -452,6 +482,18 @@ def test_heading_with_pipe_at_end_of_document_stays_intact() -> None:
     assert len(blocks) == 1
     assert blocks[0]["type"] == "markdown"
     assert blocks[0]["text"] == "## Results Before | After"
+
+
+def test_heading_with_pipe_followed_by_pipe_prose_stays_intact() -> None:
+    # Codex review on #66: a pipe-carrying next line is not enough — when the
+    # heading tail cannot supply a first cell shaped like that line's first
+    # cell, this is prose, not a glued table header.
+    raw = "## Phase 1 | Overview\nUse A | B in text"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert all(block.get("type") != "table" for block in blocks)
+    assert "## Phase 1 | Overview" in blocks[0]["text"]
 
 
 def test_empty_table_cell_is_filled_with_dash() -> None:

@@ -931,10 +931,16 @@ def _split_fenced_code_chunks(text: str) -> list[tuple[bool, str]]:
 
 
 def _normalize_underscore_emphasis_chunk(text: str) -> str:
-    # Same defense as _format_markdown_with_spacing_metadata: reserved marker
-    # code points in direct-call input must not collide with the numbered
-    # placeholders below.
-    text = INTERNAL_MARKER_CHAR_PATTERN.sub("", text)
+    # Inline code spans are paragraph-bounded (the module's span model) and
+    # must stay verbatim: Slack renders them as code, where a rewritten
+    # ``_value_`` is visible corruption. The single-line backtick alternative
+    # in PROTECTED_UNDERSCORE_SPAN_PATTERN cannot cover a span that crosses a
+    # soft line break, so the shared span walker protects those first (it
+    # also strips the reserved marker code points).
+    return _transform_outside_inline_code(text, _normalize_underscore_emphasis_prose)
+
+
+def _normalize_underscore_emphasis_prose(text: str) -> str:
     protected_spans: list[str] = []
 
     def protect(match: re.Match[str]) -> str:
@@ -1310,9 +1316,15 @@ def _split_heading_prefix_and_first_cell(
     if len(tokens) < 2:
         return None
 
-    first_cell_words = _count_cell_words(reference_cell or "")
-    first_cell_words = min(first_cell_words, len(tokens) - 1)
+    reference_words = _count_cell_words(reference_cell or "")
+    first_cell_words = min(reference_words, len(tokens) - 1)
     if first_cell_words <= 0:
+        return None
+    if first_cell_words != reference_words:
+        # The heading tail cannot supply a first cell shaped like the
+        # reference row's first cell, so this is a heading that merely
+        # contains a pipe (``## Phase 1 | Overview`` followed by prose with
+        # a pipe), not a glued table header.
         return None
 
     heading_tokens = tokens[:-first_cell_words]
@@ -1512,7 +1524,10 @@ def normalize_markdown_tables(markdown_text: str) -> str:
             heading_text, table_line = heading_and_table
             normalized.append(heading_text)
             buffer.append(table_line)
-        elif "|" in stripped:
+        elif "|" in stripped and not ATX_HEADING_PATTERN.match(line):
+            # A heading line whose glued-header split was rejected is a
+            # heading that merely contains a pipe; buffering it would let the
+            # pipe-completion heuristic swallow it as a table data row.
             buffer.append(line)
         else:
             flush_buffer()
@@ -1960,7 +1975,12 @@ def _split_lines_to_length(text: str, max_length: int, max_items: int) -> list[s
 
     def flush(next_fence_prefix: str | None) -> None:
         nonlocal current, current_len, current_items, in_run
-        if current:
+        # A piece holding nothing but the fence-open line being reopened is a
+        # synthetic duplicate (the opener was consumed, the first body part
+        # overflowed): emitting it would post a stray delimiter-only block.
+        if current and not (
+            next_fence_prefix is not None and current == [next_fence_prefix]
+        ):
             pieces.append("\n".join(current))
         if next_fence_prefix:
             current = [next_fence_prefix]
