@@ -46,6 +46,7 @@ needed:
 - `docs/_internal/slack-render-test-workflow.md`
 - `docs/_internal/slack-client-manual-checklist.md`
 - `docs/_internal/slack-render-test-app-manifest.yaml`
+- `docs/_internal/fix-and-release-playbook.md`
 
 ## Pull requests
 
