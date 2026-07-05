@@ -394,6 +394,52 @@ def test_unmatched_backtick_run_does_not_break_later_span_url() -> None:
     assert "<https://example.com>" not in converted
 
 
+def test_image_line_inside_multiline_code_span_stays_literal() -> None:
+    # Known-limitation follow-up: a block-syntax line inside a soft-break-
+    # crossing code span must not be promoted to a real block — Slack renders
+    # the whole stretch as inline code.
+    raw = "` 例\n![alt](https://example.com/a.png)\n終 `"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert [block["type"] for block in blocks] == ["markdown"]
+    assert blocks[0]["text"] == raw
+
+
+def test_table_looking_lines_inside_multiline_code_span_stay_literal() -> None:
+    raw = "説明 ` a\n| x | y |\n| 1 | 2 |\nb ` 終わり"
+
+    assert normalize_markdown_tables(raw) == raw
+    blocks = convert_markdown_to_slack_blocks(raw)
+    assert all(block.get("type") != "table" for block in blocks)
+
+
+def test_split_avoids_cutting_multiline_code_span() -> None:
+    # The intra-paragraph splitter keeps a span-crossing line boundary glued
+    # (within the size valve) so no piece is left with unmatched backticks.
+    line_one = "x" * 5800 + " ` span start"
+    line_two = "span end ` " + "y" * 5800
+    filler = "\n\n" + ("p " * 3000).strip()
+    raw = line_one + "\n" + line_two + filler
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) > 1
+    assert all(len(block["text"]) <= 12000 for block in blocks)
+    assert all(block["text"].count("`") % 2 == 0 for block in blocks)
+
+
+def test_giant_multiline_code_span_is_still_split_under_hard_limit() -> None:
+    # A span larger than the keep-together valve is cut anyway — never at the
+    # cost of exceeding the hard block limit (documented limitation).
+    raw = "` " + ("z" * 5000 + "\n") * 3 + " `"
+
+    blocks = convert_markdown_to_slack_blocks(raw)
+
+    assert len(blocks) > 1
+    assert all(len(block["text"]) <= 12000 for block in blocks)
+
+
 def test_underscore_inside_multiline_code_span_is_preserved() -> None:
     # Codex review on #66: the paragraph-bounded span model applies to
     # underscore normalization too — Slack renders the span as code, where a
