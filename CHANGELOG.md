@@ -6,6 +6,8 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-07-06
+
 ### Added
 
 - Exported `normalize_bare_urls_for_slack_markdown` as part of the public package API. It wraps bare URLs into Slack-friendly `<https://...>` autolink form, trimming each URL to its real extent (GFM-style) so adjacent CJK text and emphasis markers survive. The behavior is unchanged; only its name was already public-shaped while the function was reachable solely through the internal `slack_markdown_parser.converter` module, so it is now listed in `__all__` and the README utility tables.
