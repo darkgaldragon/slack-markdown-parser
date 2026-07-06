@@ -12,6 +12,7 @@ The format is based on Keep a Changelog, and the project follows Semantic Versio
 
 ### Changed
 
+- Split the single 2,980-line `converter.py` module into focused internal modules — `_constants`, `_code_regions`, `_sanitize`, `_emphasis`, `_lines`, `_rich_text`, `_tables`, `_splitting`, `_rich_blocks`, and `_fallback` — with an acyclic dependency graph. Code was moved verbatim (every definition is AST-identical to before), so behavior is unchanged. `converter.py` remains the orchestration module and re-exports every name previously defined in it — including private helpers — so existing `slack_markdown_parser.converter` imports keep working (incidental stdlib passthroughs such as `re` are not preserved). Duplicated-logic drift across passes (the root cause of the 2.5.0 sanitize corruption) now has module boundaries working against it.
 - Renamed the internal table-candidate heuristic `looks_like_markdown_table` to `_looks_like_markdown_table` to match its single-caller, internal-only status. It was never listed in `__all__` or the public docs, so this only affects code that imported it directly from `slack_markdown_parser.converter`.
 
 ### Documentation
